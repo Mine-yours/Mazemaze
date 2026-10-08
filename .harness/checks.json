@@ -14,7 +14,7 @@
   ],
   "manual_checks": [
     "ollama list に qwen3.5:9b と translategemma:12b があり、実行ログに『ローカル専用の制約により使用できません』が出ない",
-    "Ollama サーバー側のクラウド機能を無効化し（eval/README.md 参照）、server.log の最新行が 'Ollama cloud disabled: true' であることを確認する（2026-10-08 時点は false = 有効）",
+    "Ollama サーバー側のクラウド機能を無効化し（eval/README.md 参照）、server.log の最新行が 'Ollama cloud disabled: true' であることを確認する（2026-10-08 17:32 の再起動後は true = 無効を確認済み）",
     "python -m eval.run_compare を実行し、eval_runs/<日時>/ に4ファイルができ、run_meta.json の status が complete である",
     "実行中に Ctrl-C を押しても human_scores.csv と blind_key.json が残り、status が interrupted になる",
     "human_scores.csv を Numbers や Excel で開いて文字化けせず、モデル名が見えない",

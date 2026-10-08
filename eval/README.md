@@ -54,12 +54,12 @@ python3 scripts/harness_verify.py --level quick
 機械的に検出できるのは、形式・日本語の混入・長さ・前置き・プレースホルダ・URL／メール／数値の欠落・スパン外の URL／メール／数字／コードの混入まで。訳が意味的に正しいこと、自然さ、言い換えによる重複は検出できない（人手採点が必要）。
 
 ## Ollama サーバー側のクラウド機能
-**現状（2026-10-08、読み取りのみで確認。設定は変更していない）: クラウド機能は有効。**
-- 稼働中のサーバー（Ollama.app の `ollama serve`、2026-09-09 起動）の環境変数が `OLLAMA_NO_CLOUD=0`（確認コマンド: `ps eww -p <ollama serve の pid>` の出力から `OLLAMA_` で始まる項目だけを抜き出した。2026-10-08 に実施。ログ行は環境変数が 0 でも未設定でも同じになるため、この項目の裏付けはプロセス環境のみ）。
-- `~/.ollama/server.json` は存在しない。`launchctl getenv OLLAMA_NO_CLOUD` と現在のシェルの `OLLAMA_*` も未設定。
-- `~/.ollama/logs/server.log` の最新の起動ログが `Ollama cloud disabled: false`。
+**現状（2026-10-08 20:00 頃に再確認。読み取りのみ。この作業では設定を変更していない）: クラウド機能は無効（`~/.ollama/server.json` に `disable_ollama_cloud: true` が 17:28 に作成され、17:32 に再起動された）。**
+- 稼働中のサーバー（`ollama serve`、pid 30591、2026-10-08 17:32:12 起動）の環境に `OLLAMA_NO_CLOUD=1`（`ps eww` の `OLLAMA_` 項目のみ確認）。
+- 同じ起動の最初のログ行が `Ollama cloud disabled: true`（`~/.ollama/logs/server.log` 2 行目）。それ以前の起動（`server-1.log` など）は `false`。
+- 以前の記載（同日 17:12 の評価時点では有効＝`OLLAMA_NO_CLOUD=0`、`server.json` なし、`disabled: false`）は過去の状態。**30 件比較と Judge 評価の run（`20261008-171216`）は、クラウド有効のサーバーに対して行われた**（ただしクラウドモデルは使用しておらず、ローカルモデルのみ。メタデータ検証済み）。
 
-このツールは、モデル名とメタデータでクラウドモデルを拒否するが、サーバー側の設定は検出も変更もしない。無効化する方法（Ollama 公式 FAQ「How do I disable Ollama cloud features」の記載を WebFetch で読んだもの。キー名・環境変数名が正しいかは、適用して再起動し、ログが `disabled: true` になるまで未確認。この環境では未適用）:
+このツールは、モデル名とメタデータでクラウドモデルを拒否するが、サーバー側の設定は検出も変更もしない。（無効化の手順。上記の再起動後に有効と確認済み）無効化する方法（Ollama 公式 FAQ「How do I disable Ollama cloud features」の記載を WebFetch で読んだもの。キー名・環境変数名が正しいかは、適用して再起動し、ログが `disabled: true` になるまで未確認。この環境では未適用）:
 1. **Ollama 専用の設定ファイル（推奨）**: `~/.ollama/server.json` に `{"disable_ollama_cloud": true}` を書き、Ollama を再起動する。Mac 全体の設定は変わらず、Ollama だけに効く。
 2. **環境変数**: `OLLAMA_NO_CLOUD=1`。メニューバーのアプリで使う場合は `launchctl setenv OLLAMA_NO_CLOUD 1` が必要で、ログインセッション全体の環境が変わる。再起動も必要。
 3. **設定を変えずに評価だけ分離する（未検証）**: 別ターミナルで `OLLAMA_NO_CLOUD=1 OLLAMA_HOST=127.0.0.1:11435 ollama serve` を起動し、`--base-url http://127.0.0.1:11435` で評価する。既存のサーバーとモデルを共有し、両方がモデルを読み込むとメモリを消費する。
