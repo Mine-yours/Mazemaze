@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not ollama' --strict-markers"
+markers = ["ollama: uses real local Ollama"]

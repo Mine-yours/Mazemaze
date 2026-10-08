@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+eval_runs/
+*.db
+.DS_Store
+.claude/settings.local.json
