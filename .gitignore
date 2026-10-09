@@ -6,3 +6,9 @@ eval_runs/
 *.db
 .DS_Store
 .claude/settings.local.json
+.mazemaze_token
+ios/build/
+xcuserdata/
+*.xcuserstate
+.build/
+.swiftpm/

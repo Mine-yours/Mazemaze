@@ -1,0 +1,287 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		F599865DB12219E28A1168BB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */; };
+		598ECA083E8EED53CC291A81 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14BC652CBAB00934BF0C021B /* BrowserView.swift */; };
+		9E0BF8DF6A2ACE7388B73DA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */; };
+		AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */; };
+		77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */; };
+		CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F529774BF11EA85B1A85540F /* SelfTest.swift */; };
+		2B18348839A894F2471A9E94 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FCF97F97731EF8AD6CE27F /* SettingsView.swift */; };
+		6FED3F022C889CE8FF7FC638 /* translator.js in Resources */ = {isa = PBXBuildFile; fileRef = 24E300CCF8249C399A82921D /* translator.js */; };
+		50EFE5093E96DBC7BC3A811C /* MazemazeCore in Frameworks */ = {isa = PBXBuildFile; productRef = F24C5F60E3D7EFF68E987C74 /* MazemazeCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		996AD237BC284D463E664FFE /* Mazemaze.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mazemaze.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D66ADE64E49AA35420BAEC8B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppModel.swift"; sourceTree = "<group>"; };
+		14BC652CBAB00934BF0C021B /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BrowserView.swift"; sourceTree = "<group>"; };
+		25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+		900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainSecretStore.swift"; sourceTree = "<group>"; };
+		A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MazemazeApp.swift"; sourceTree = "<group>"; };
+		F529774BF11EA85B1A85540F /* SelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SelfTest.swift"; sourceTree = "<group>"; };
+		16FCF97F97731EF8AD6CE27F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
+		24E300CCF8249C399A82921D /* translator.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/translator.js"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4FCBC29864E7C7752B7E193F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				50EFE5093E96DBC7BC3A811C /* MazemazeCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		71DC27D9F8E3B109C877BFC4 = {
+			isa = PBXGroup;
+			children = (
+				42006AB264CF2AB66A8087C0 /* Mazemaze */,
+				113236722DEE1DC96F378B9D /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		42006AB264CF2AB66A8087C0 /* Mazemaze */ = {
+			isa = PBXGroup;
+			children = (
+				B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */,
+				14BC652CBAB00934BF0C021B /* BrowserView.swift */,
+				25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */,
+				900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */,
+				A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */,
+				F529774BF11EA85B1A85540F /* SelfTest.swift */,
+				16FCF97F97731EF8AD6CE27F /* SettingsView.swift */,
+				24E300CCF8249C399A82921D /* translator.js */,
+				D66ADE64E49AA35420BAEC8B /* Info.plist */,
+			);
+			path = Mazemaze;
+			sourceTree = "<group>";
+		};
+		113236722DEE1DC96F378B9D /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				996AD237BC284D463E664FFE /* Mazemaze.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F01C2E624E08A72BC055B46F /* Mazemaze */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5EB39897192143D4967C0D30 /* Build configuration list for PBXNativeTarget "Mazemaze" */;
+			buildPhases = (
+				C197A1D4E0DE673615AC32CB /* Sources */,
+				4FCBC29864E7C7752B7E193F /* Frameworks */,
+				8A6A452CEE30B0908A47D41D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Mazemaze;
+			packageProductDependencies = (
+				F24C5F60E3D7EFF68E987C74 /* MazemazeCore */,
+			);
+			productName = Mazemaze;
+			productReference = 996AD237BC284D463E664FFE /* Mazemaze.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		46F86FAA6BBF9AC94A7E4595 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					F01C2E624E08A72BC055B46F = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 32D42B6A09FA42C6EFFC8E0F /* Build configuration list for PBXProject "Mazemaze" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = ja;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				ja,
+				en,
+				Base,
+			);
+			mainGroup = 71DC27D9F8E3B109C877BFC4;
+			packageReferences = (
+				8FC787B45A1FF178F649F112 /* XCLocalSwiftPackageReference "MazemazeCore" */,
+			);
+			productRefGroup = 113236722DEE1DC96F378B9D /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F01C2E624E08A72BC055B46F /* Mazemaze */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		8A6A452CEE30B0908A47D41D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6FED3F022C889CE8FF7FC638 /* translator.js in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C197A1D4E0DE673615AC32CB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F599865DB12219E28A1168BB /* AppModel.swift in Sources */,
+				598ECA083E8EED53CC291A81 /* BrowserView.swift in Sources */,
+				9E0BF8DF6A2ACE7388B73DA7 /* ContentView.swift in Sources */,
+				AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */,
+				77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */,
+				CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */,
+				2B18348839A894F2471A9E94 /* SettingsView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		BF20ADA4BADCE0D874998719 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D247EF59B93D2323D10271C0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		E3B8F5EFBFC1CE01003F9888 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Mazemaze/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Mazemaze;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = jp.mineno.mazemaze;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		CCCAD83F788AAFA187A48A3F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Mazemaze/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Mazemaze;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = jp.mineno.mazemaze;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		32D42B6A09FA42C6EFFC8E0F /* Build configuration list for PBXProject "Mazemaze" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BF20ADA4BADCE0D874998719 /* Debug */,
+				D247EF59B93D2323D10271C0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5EB39897192143D4967C0D30 /* Build configuration list for PBXNativeTarget "Mazemaze" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E3B8F5EFBFC1CE01003F9888 /* Debug */,
+				CCCAD83F788AAFA187A48A3F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		8FC787B45A1FF178F649F112 /* XCLocalSwiftPackageReference "MazemazeCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = MazemazeCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F24C5F60E3D7EFF68E987C74 /* MazemazeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = MazemazeCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 46F86FAA6BBF9AC94A7E4595 /* Project object */;
+}

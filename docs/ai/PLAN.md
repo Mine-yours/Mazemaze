@@ -20,4 +20,7 @@
 | A2 スパン選択・変換 API（`selector.py`・`service.py`・`app.py`・`config.py`） | DONE | `tests/test_selector.py`・`test_api.py`・`test_api_security.py` | 実 Qwen で API 経由の変換を確認 |
 | A3 スマホ向け画面 `frontend/` | DONE（実機未確認） | `tests/test_frontend_static.py`（静的検査のみ） | iPhone/Android 実機は未確認 |
 | A4 起動スクリプト・README | DONE | `scripts/run_local.sh`・`run_lan.sh`、`README.md` | LAN は同一 Mac から実 IP で確認、スマホ実機は未確認 |
-| 次: 実機確認・人手採点・モデル正式選定 | TODO | | |
+| B1 iOS 土台（Xcode プロジェクト、SwiftUI ブラウザ、設定、接続確認、ATS/ローカルネットワーク） | DONE（実機未確認） | `swift test`、シミュレータ自己テスト、Release 実機向けビルド | `ios/` |
+| B2 ページの自動英語化（`translator.js`、WKContentWorld、置換・復元・原文表示） | DONE（実機未確認） | Chrome DOM テスト 59 件、シミュレータ自己テスト 14 項目 | |
+| B3 動的サイト対応（MutationObserver、視認範囲優先、直列、重複/ループ防止） | DONE（実 X は未確認） | DOM テスト、実 Yahoo!ニュース記事で確認 | X はログイン必須 |
+| 次: iPhone 実機確認・実 X での確認・人手採点・モデル正式選定 | TODO | | |

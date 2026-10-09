@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>動的ページ</title></head>
+<body><main id="feed"><p id="first">最初から表示されている段落です。日本語の文章がここにあります。</p></main>
+<script>
+  window.addPost = function (text, id) {
+    var p = document.createElement("p"); p.id = id || ""; p.textContent = text;
+    document.getElementById("feed").appendChild(p); return p;
+  };
+  window.addMany = function (n) { for (var i = 0; i < n; i++) addPost("動的に追加された段落の番号は " + i + " 番で、日本語のテキストです。", "dyn" + i); };
+  window.spaNavigate = function () {
+    document.getElementById("feed").innerHTML = "<p id='spa1'>画面遷移のあとに表示された新しいページの段落です。日本語です。</p>";
+  };
+</script></body></html>

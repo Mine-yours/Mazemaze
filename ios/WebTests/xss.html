@@ -1,0 +1,6 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>XSS</title></head>
+<body><main>
+<p id="x1">日本語のテキストの中に &lt;img src=x onerror="window.__xss=1"&gt; という文字列があります。読んでください。</p>
+<p id="x2">&lt;/span&gt;&lt;script&gt;window.__xss=2&lt;/script&gt; を含む日本語のテキストです。これは安全です。</p>
+</main></body></html>

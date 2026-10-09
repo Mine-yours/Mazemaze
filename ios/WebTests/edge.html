@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>境界ケース</title></head>
+<body><main id="m">
+<p id="adj"></p>
+<div id="flex" style="display:flex"><span>フレックスの子要素の日本語のテキストです。翻訳しません。</span></div>
+<div data-testid="DMDrawer"><div data-testid="tweetText"><span id="dm">ダイレクトメッセージの本文の日本語のテキストです。送りません。</span></div></div>
+<article data-testid="tweet"><div data-testid="tweetText"><span id="ok">普通の投稿の日本語のテキストです。これは翻訳されます。</span></div></article>
+<p id="plain">普通の段落の日本語のテキストです。これは翻訳されます。</p>
+<div id="eng"></div>
+<script>
+  var p = document.getElementById("adj");
+  p.appendChild(document.createTextNode("隣り合うテキストノードの前半の日本語です。"));
+  p.appendChild(document.createTextNode("隣り合うテキストノードの後半の日本語です。"));
+  var eng = document.getElementById("eng");
+  for (var i = 0; i < 700; i++) { var d = document.createElement("p"); d.textContent = "English only paragraph number " + i; eng.appendChild(d); }
+  window.addJa = function () { var d = document.createElement("p"); d.id = "late"; d.textContent = "あとから追加された日本語の段落です。これは翻訳されます。"; document.getElementById("m").appendChild(d); };
+</script></main></body></html>

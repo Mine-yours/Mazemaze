@@ -1,5 +1,37 @@
 # Handoff state
 
+## iPhone アプリの状態（2026-10-09・最新）
+**個人用 iPhone ブラウザアプリ「Mazemaze」（SwiftUI + WKWebView、`ios/`）を実装した。** 許可サイト（x.com / twitter.com / news.yahoo.co.jp）を閲覧すると、本文の日本語の一部が Mac 上の既存 FastAPI + Ollama（Qwen3.5:9b）で英語に置き換わる。**iPhone 実機は未確認**。Web 版 MVP とバックエンド（`backend/`）は変更していない。**未コミット**（`ios/`、README・CLAUDE.md §12・DECISIONS・PLAN・`scripts/run_lan.sh`・`.gitignore` の変更。承認待ち）。
+
+### 場所と使い方
+- Xcode プロジェクト: `ios/Mazemaze.xcodeproj`（`ios/tools/generate_project.py` で再生成可）。純ロジックは Swift Package `ios/MazemazeCore`。ページ内スクリプトは `ios/Mazemaze/Resources/translator.js`。
+- 起動手順（初心者向け）は `README.md`「iPhone アプリ」。Mac: `./scripts/run_lan.sh`（URL とトークンを表示。トークンは `.mazemaze_token` に保存）→ Xcode で署名（Team 選択）→ iPhone で実行 → アプリの設定に URL とトークン。
+
+### 確認した証拠
+- `swift test`（`ios/MazemazeCore`）: **46 件通過**（接続先・サイトポリシーの攻撃的入力、メッセージ検証、直列化、世代、キャンセル、キャッシュ、429、ブレーカ、設定/キーチェーン分離、リダイレクト非追従）。わざと壊す変異（古い世代の結果を成功扱い）でテストが失敗することを確認。
+- `node ios/WebTests/run_dom_tests.mjs`（実 Chrome、モックのネイティブブリッジ）: **63 件通過**（置換、`body.innerHTML` の完全復元、除外要素、ポップオーバー、動的追加、SPA 遷移と古い世代の破棄、React 風の書き換え・削除・`normalize()`、書き換え続けるページ、XSS、原文不一致の破棄、失敗ポリシー、水和待ち、DM 除外、長い段落の分割）。ZWSP を空文字に変える変異でテストが失敗することを確認。
+- `./ios/scripts/simulator_selftest.sh`（iOS 26.1 シミュレータ、実 WKWebView + Swift ブリッジ + URLSession + 実 FastAPI（LAN の実 IP 経由・トークン）+ 偽 Ollama）: **14 項目通過**。ページの JS から専用 world のスクリプトとネイティブハンドラが見えない（`typeof` = undefined）こと、除外要素が不変なこと、英語タップで原文、翻訳 OFF／原文に戻すで DOM が完全一致に戻ること、ログイン系パスと password ページが翻訳されないこと、動的追加、トークン違いの表示と停止、API サーバーログに日本語本文が出ないこと。
+- 実サイト: シミュレータで**実際の Yahoo!ニュース記事**（news.yahoo.co.jp/expert/articles/…）を実 Qwen3.5:9b で翻訳し、見出し・キャプション・本文・小見出しが英語混じりになることを目視確認（スクリーンショット）。トップ/ピックアップ一覧は見出しが `<a>` のためほぼ変わらない（仕様）。
+- `.venv/bin/python -m pytest -q`: 501 件通過。Release（実機向け `generic/platform=iOS`、署名なし）のビルド成功。Release バイナリにデバッグ用の起動引数・セルフテストの文字列は含まれない。`Info.plist` は `NSAllowsLocalNetworking` と `NSLocalNetworkUsageDescription` のみ。
+- 独立レビュー: 設計（dev-architect、dev-test-strategist）→ 実装後（dev-reviewer、dev-ux-auditor）→ 修正後に再レビュー（dev-reviewer）。実装後の高 2 件（一時的失敗でページ全体が永久に失敗扱い／英語だけのブロックで登録枠が枯渇）、中 7 件、UX の高 5 件は修正済み。再レビューの中 4 件（同一文章の失敗が永久に再送される、同一 URL 再読み込みで世代が上がらない、同世代 configure で止まる、bridge 拒否の無限リトライ）と低〜中の指摘も修正し、テストを追加した。最終コードの**再々レビューは未実施**（修正後のテストはすべて通過）。
+
+### 未確認・既知の問題
+- **iPhone 実機は未確認**: ローカルネットワーク許可ダイアログ（シミュレータでは出ない）、実 Wi-Fi、署名とインストール、WebKit の実機での挙動、VoiceOver・Dynamic Type・ダークの実見た目。署名なしのシミュレータビルドでは Keychain が使えない（署名ありなら動作。実機は署名が必要）。
+- **X は未確認**（ログインが必要で、`data-testid` は仮説。実 DOM で動かない可能性がある）。DM を送らないための除外は入れたが実 DOM では未検証。ログイン・DM・表示制限は回避しない。
+- Yahoo の見出しなど**リンク内の文字は翻訳しない**（タップ遷移を妨げないため）。一覧ページは変化が少ない。React/Next の水和との相互作用（Yahoo は SSR）は、DOM 変化が静まるまで待つ対策のみ。実機・実ページでのコンソール確認は未実施。
+- 進行中の要求は cancel しない設計のため、直前の長い要求の後ろで最大約 3 分待たされることがある。1 ブロック 2〜7 秒の直列処理で、長い記事は少しずつ置き換わる。
+- 通信は HTTP 平文（LAN）。トークンは Mac の `.mazemaze_token` に平文（権限 600、Git 管理外）。無料 Apple ID の署名は 7 日で失効する。
+- ページ側が隣り合うテキストノードや flex の親を使う箇所は翻訳しない。ZWSP を使うため、ページ側がプレースホルダの前後を編集すると復元が不完全になりうる（検知して復元を試みる）。
+
+### 次の最小アクション
+1. 変更のコミット承認（私は未コミット）。
+2. 実機（iPhone）で README の手順どおりに入れ、Yahoo の記事で確認 → 問題があれば `ios/` を調整。X は実際にログインして確認し、`data-testid` を実 DOM に合わせる。
+3. 必要なら再々レビュー。
+
+---
+
+# （以下は Web 版 MVP 時点の状態）
+
 ## MVP アプリの状態（2026-10-08・最新）
 **Mac 上で起動し、スマホ幅のブラウザ画面から日本語文を入力して、ローカル Qwen3.5:9b による日英混在文を表示・コピーできる MVP を実装した。** 実機スマホでの確認は未実施。コミットはしていない（承認待ち）。
 

@@ -91,3 +91,16 @@ For each significant decision record: date, context, alternatives, choice, conse
 - 表示整形は `docs/ai/DISPLAY_FORMATTING.md`。`validate_translation` は互換性のため変更せず、全角句読点・全角記号（U+3000–303F / U+FF00–FFEF）を含む訳はサービス層で不採用にする。
 - フロント: `<button>` ではなく `span[role=button][tabindex=0]` で英語部分を描画（WebKit で inline-block 扱いになり折り返しが崩れるため）。日英の間にスペースを挿入しない（スパン外の原文を変えないため）。コピーは `display` の連結。HTTP の LAN は secure context ではないので Clipboard API が使えず、`execCommand` → 選択済み textarea の順で代替。下書きは `sessionStorage`（そのタブのみ）。
 - Reversal: 各モジュールは独立。`backend/app.py` を外せば評価環境だけに戻る。
+
+## 2026-10-09 iPhone アプリ（SwiftUI + WKWebView）の設計判断
+- Context: 最終形は個人用 iPhone ブラウザアプリ（CLAUDE.md §12）。既存 FastAPI・翻訳処理・テストは変更せず再利用する。設計は dev-architect / dev-test-strategist、実装後は dev-reviewer / dev-ux-auditor、修正後に再レビュー。
+- 構成: `ios/MazemazeCore`（Swift Package、Foundation のみ。`swift test` で検証）に純ロジックを置き、`ios/Mazemaze`（iOS アプリ）は薄くする。プロジェクトファイルは `ios/tools/generate_project.py` で生成（xcodegen 等を入れない）。
+- 通信はすべて Swift の URLSession（リダイレクト非追従、キャッシュ/Cookie なし）。接続先は `LocalHostPolicy` が Mac / ローカルネットワークの正準な IPv4・localhost・`::1`・`*.local` だけに限定（数値表記の別形式、userinfo、IPv6 の他の形式は拒否。検証した文字列から URL を再構築して接続）。トークンは Keychain（`WhenUnlockedThisDeviceOnly`）のみ。ATS は `NSAllowsLocalNetworking` のみ（任意の HTTP は不許可）。
+- ページ内スクリプトは専用 `WKContentWorld` に注入し、メッセージハンドラも同じ world に登録（ページの JS からは `window.webkit.messageHandlers.mazemaze` も `__mazemaze` も見えない。シミュレータで実測）。JS が送れるのは `ready` と `translate{gen,text}` だけで、ratio/unit は Swift の設定値。メッセージごとに `WKFrameInfo` と `webView.url` で SitePolicy を再判定する。
+- 翻訳対象サイトは許可リスト（既定 x.com / twitter.com / news.yahoo.co.jp、https のみ、ポート 443 のみ）。X は許可パス方式（タイムライン・投稿・検索・プロフィール）、その他は拒否パス（login/logout/signup/oauth/account/settings/messages/compose/i/flow 等、セグメント単位・`..`/重複スラッシュ/%エンコードを正規化）。ホスト名に login/accounts/auth 等を含むものは拒否。ユーザーが追加する許可サイトは裸の TLD・公開サフィックス・共有ホスティング・IP を登録不可。
+- DOM 置換: テキストノード単位ではなくブロック（最内の block 要素、X は tweetText）単位で、翻訳対象ノードを `\n` 連結して 1 リクエスト（600 字以内）にし、返ったセグメントをノード境界へ再分配（英語セグメントは分割しない、`\n` は日本語として戻る、原文連結が一致しなければ破棄）。元のテキストノードは DOM に残し nodeValue を ZWSP にして、直後に `<span data-mazemaze>`（日本語テキストノード + 英語 `<span>`）を挿入。React 等が保持するノード参照を壊さず、`normalize()` で空ノードが消えるのを避けるため。復元は wrapper 削除 + nodeValue を元に戻す（`body.innerHTML` が翻訳前と完全一致することをテスト）。ページが元ノードを書き換えたら訳を外して再評価（試行上限）。隣接テキストノード・flex/grid 親・リンク/ボタン/入力欄/ruby/dialog 等は対象外。innerHTML は使わない（`textContent` と `createElement` のみ）。
+- スケジューリング: 画面付近のブロックだけ（IntersectionObserver）、近い順に 1 件ずつ（直列）。MutationObserver で後から追加された本文に対応（自分の変更は `takeRecords` で捨てる）。水和（hydration）待ち: 読み込み完了かつ DOM 変化が 600ms 無くなるまで（最大 6 秒）。一時的な失敗（busy/paused/unreachable/timeout/server）はページ単位の指数バックオフでノードを諦めない。ノード固有の失敗は 2 回で打ち切り。
+- 世代管理: ページ遷移（fragment を除く URL の変化。SPA 含む）で世代を増やし、待機中の要求を stale にする。**進行中の HTTP は cancel しない**（サーバー側も止められず、cancel すると 429 を量産するため）。結果はキャッシュして JS には stale を返す。429 は `Retry-After`（1〜15 秒）で最大 6 回再試行。連続 3 回の通信/5xx 失敗で 30 秒停止（401・429・検証失敗はブレーカ対象外）。キャッシュはメモリのみ（本文をディスクに残さない）。
+- 既知の限界: 見出しが `<a>` の一覧ページ（Yahoo のトップ等）はほとんど変わらない（リンクのタップ遷移を妨げないため）。DOM の実挙動は WebKit/実 React では実機未確認。進行中の長い要求の後ろに最大約 3 分待たされることがある。X の実 DOM（`data-testid`）は未確認で変更されうる。
+- Reversal: `ios/` を削除すれば Web 版 MVP だけに戻る（バックエンドは `scripts/run_lan.sh` のトークン永続化以外未変更）。
+

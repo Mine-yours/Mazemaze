@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>テスト記事</title>
+<style>body{font:16px/1.7 sans-serif;margin:16px}</style></head>
+<body>
+<nav>ナビゲーションのテキストです。これは翻訳されません。</nav>
+<article id="article">
+  <h1>今日の天気はとても良くて、散歩に行きたくなりました</h1>
+  <p id="p1">今日は天気がとても良かったので、友達と一緒に公園へ散歩に行きました。帰り道に新しいカフェを見つけて、コーヒーを飲みながら本を読みました。</p>
+  <p id="p2">リンクを含む段落です。<a id="link" href="#x">このリンクの文字は翻訳しません</a>のあとにも日本語の文章が続いて、最後まで読めます。</p>
+  <p id="p3">English only paragraph with no Japanese at all.</p>
+  <p id="p4">短い。</p>
+  <p id="p5"><b>太字の日本語の部分も</b>、普通の本文として翻訳の対象になります。<i>斜体もあります</i>ね。</p>
+  <pre id="pre">コード用の日本語テキストはそのままです。翻訳しません。</pre>
+  <textarea id="ta">入力欄の中の日本語のテキストは触りません。そのままです。</textarea>
+  <input id="in" value="入力欄の値は触りません" />
+  <button id="btn">ボタンの中の日本語のテキストは触りません</button>
+  <div id="edit" contenteditable="true">編集できる領域の日本語のテキストは触りません。</div>
+  <p id="hid" aria-hidden="true">aria-hidden の日本語のテキストは翻訳しません。</p>
+  <p id="hid2" hidden>hidden 属性の日本語のテキストは翻訳しません。</p>
+  <p id="nt" class="notranslate">notranslate の日本語のテキストは翻訳しません。</p>
+</article>
+<footer>フッターの日本語のテキスト。これは article の外です。</footer>
+<script>window.__pageScriptRan = true;</script>
+</body></html>

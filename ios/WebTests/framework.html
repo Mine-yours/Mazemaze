@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>フレームワーク風</title></head>
+<body><main id="root"></main>
+<script>
+  // A tiny stand-in for a React-like renderer: it keeps references to its own text nodes and
+  // later updates nodeValue, removes nodes, replaces subtrees and calls normalize().
+  var root = document.getElementById("root");
+  var cell = document.createElement("div"); cell.id = "cell"; root.appendChild(cell);
+  var span = document.createElement("span"); cell.appendChild(span);
+  var tn = document.createTextNode("フレームワークが管理している日本語のテキストで、あとから更新されます。");
+  span.appendChild(tn);
+  window.fw = {
+    node: tn,
+    update: function (t) { tn.nodeValue = t; },
+    removeNode: function () { span.removeChild(tn); },
+    insertNew: function (t) { var n = document.createTextNode(t); span.appendChild(n); fw.node = n; return n; },
+    replaceCell: function (t) { cell.innerHTML = ""; var s = document.createElement("span"); s.appendChild(document.createTextNode(t)); cell.appendChild(s); },
+    normalize: function () { cell.normalize(); },
+    loopOverwrite: function (t, ms) { var iv = setInterval(function () { fw.node.nodeValue = t; }, ms); return iv; }
+  };
+</script></body></html>
