@@ -7,11 +7,35 @@ import MazemazeCore
 /// access (and the token) stays on the Swift side.
 /// Shows the web view that belongs to a tab. The web view lives in the tab (not in this view), so
 /// switching tabs never reloads a page.
-struct BrowserView: UIViewRepresentable {
+struct BrowserView: UIViewControllerRepresentable {
     let tab: TabModel
+    /// The part of the screen covered by the address bar / toolbar. The page is laid out around it (as a safe area),
+    /// so fixed headers and 100vh behave, and it grows to the whole screen when the bars slide away.
+    var covered: UIEdgeInsets = .zero
 
-    func makeUIView(context: Context) -> WKWebView { tab.ensureWebView() }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func makeUIViewController(context: Context) -> WebHostController { WebHostController(webView: tab.ensureWebView()) }
+    func updateUIViewController(_ vc: WebHostController, context: Context) { vc.covered = covered }
+}
+
+/// Holds the tab's web view edge to edge and tells it how much of the screen the bars cover.
+final class WebHostController: UIViewController {
+    let webView: WKWebView
+    var covered: UIEdgeInsets = .zero { didSet { if covered != oldValue { additionalSafeAreaInsets = covered } } }
+
+    init(webView: WKWebView) { self.webView = webView; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func loadView() { view = UIView() }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor), webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor), webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        additionalSafeAreaInsets = covered
+    }
 }
 
 @MainActor
@@ -97,6 +121,16 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             web.observe(\.canGoForward, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.canGoForward = w.canGoForward } },
             web.observe(\.isLoading, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.isLoading = w.isLoading } },
             web.observe(\.estimatedProgress, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.progress = w.estimatedProgress } },
+            web.scrollView.observe(\.contentOffset, options: [.new]) { [weak self] sv, _ in
+                MainActor.assumeIsolated {
+                    // Only a finger (dragging / the fling after it) hides the bars: not an anchor jump, a script or a relayout.
+                    var driven = sv.isDragging || sv.isDecelerating
+                    #if DEBUG
+                    if SelfTest.isActive || SelfTest.value("-MazemazeScrollDemo") == "1" { driven = true }      // tests scroll with scripts
+                    #endif
+                    self?.tab.scrolled(offset: Double(sv.contentOffset.y), minOffset: Double(-sv.adjustedContentInset.top), userDriven: driven)
+                }
+            },
         ]
     }
 
@@ -176,6 +210,9 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         case .success(.ready):
             let gen = await app.service.generation(of: tab.id)
             return (tab.pageConfig(for: pageURL, gen: gen), nil)
+        case .success(.save(let en, let ja)):
+            guard app.decision(for: pageURL).isAllowed else { return (["ok": false, "error": "not_allowed", "message": "このページでは保存できません"], nil) }
+            return (app.saveToDictionary(english: en, japanese: ja, pageURL: pageURL), nil)
         case .success(.translate(let gen, let text)):
             // Re-check on every request: a single-page app may have moved to a denied page.
             guard app.decision(for: pageURL).isAllowed, app.translationEnabled, !tab.suspendedForPage else {
@@ -235,6 +272,29 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         }
     }
 
+    #if DEBUG
+    /// Simulator only: scroll the page down and up the way a finger would, and report the viewport.
+    func debugScrollDemo(_ web: WKWebView) async {
+        func report(_ tag: String) async {
+            let js = "return JSON.stringify({ h: window.innerHeight, w: window.innerWidth, y: Math.round(window.scrollY), fixedTop: (document.getElementById('fx') ? Math.round(document.getElementById('fx').getBoundingClientRect().top) : null) })"
+            let r = try? await web.callAsyncJavaScript(js, arguments: [:], in: nil, contentWorld: .page)
+            print("SCROLLDEMO \(tag) hidden=\(tab.barsHidden) off=\(Int(web.scrollView.contentOffset.y)) adj=\(web.scrollView.adjustedContentInset) \(r as? String ?? "nil")")
+            fflush(stdout)
+        }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        await report("start")
+        _ = try? await web.callAsyncJavaScript("window.scrollTo(0, 150)", arguments: [:], in: nil, contentWorld: .page)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        await report("scrolled-150")
+        _ = try? await web.callAsyncJavaScript("window.scrollTo(0, 700)", arguments: [:], in: nil, contentWorld: .page)
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        await report("scrolled-700 (bars should be away)")
+        _ = try? await web.callAsyncJavaScript("window.scrollBy(0, -60)", arguments: [:], in: nil, contentWorld: .page)
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        await report("up-60 (bars should be back)")
+    }
+    #endif
+
     // MARK: browser identity (X only, owner's decision of 2026-10-09; see BrowserIdentity)
     private static var defaultUserAgent: String?
 
@@ -275,6 +335,7 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         // and the "this page shows the original" choice is forgotten. The new document asks for its
         // configuration itself once it is ready.
         tab.resetCounters()
+        tab.resetBars()
         Task { @MainActor in
             await tab.pageWillChange()
             pushConfig()      // a no-op while the new document has no script yet; covers pages restored from the cache
@@ -283,6 +344,9 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if tab.kind == .paste { fillPaste(); return }
+        #if DEBUG
+        if SelfTest.value("-MazemazeScrollDemo") == "1" { Task { @MainActor in await self.debugScrollDemo(webView) } }
+        #endif
         app.recordVisit(of: tab)
         scheduleNothingToTranslateHint()
     }

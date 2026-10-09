@@ -38,6 +38,11 @@ final class AppModel: ObservableObject {
     @Published var unit: TranslationUnit { didSet { if oldValue != unit { settings.unit = unit; configChanged() } } }
     @Published var allowedHosts: [String]
 
+    // Dictionary (expressions the person saved; this iPhone only)
+    let dictionaryStorage: DictionaryStorage
+    @Published private(set) var dictionary: DictionaryData
+    @Published var dictionaryProblem: String?
+
     // Home screen
     @Published private(set) var bookmarks: BookmarkData
     private let bookmarkStorage: BookmarkStorage
@@ -92,6 +97,16 @@ final class AppModel: ObservableObject {
         sitePolicy = SitePolicy(allowedHosts: store.allowedHosts, allowInsecureLocalhost: debugAllowLocalhost)
         bookmarkStorage = BookmarkStorage(defaults: store.userDefaults)
         bookmarks = bookmarkStorage.load()
+        // A run with debug launch arguments (tests) never touches the real dictionary.
+        #if DEBUG
+        let useTempDictionary = usesDebugArgs || args.contains("-MazemazeDemoDictionary")
+        #else
+        let useTempDictionary = false
+        #endif
+        let dictFile = useTempDictionary ? FileManager.default.temporaryDirectory.appendingPathComponent("mazemaze-dictionary-test-\(ProcessInfo.processInfo.processIdentifier).json") : DictionaryStorage.defaultFileURL()
+        dictionaryStorage = DictionaryStorage(fileURL: dictFile)
+        dictionary = dictionaryStorage.load()
+        dictionaryProblem = dictionaryStorage.lastLoadProblem
         let s = store
         service = TranslationService(transport: urlTransport,
                                      config: { s.serverConfig() },
@@ -341,6 +356,53 @@ final class AppModel: ObservableObject {
         guard let host = url?.host?.lowercased(), let entry = SitePolicy.normalizeEntry(host) else { return false }
         if !allowedHosts.contains(entry) { setAllowedHosts(allowedHosts + [entry]) }
         return true
+    }
+
+    // MARK: dictionary
+    /// Called when the person taps "辞書に保存" in the popover. The page supplies the two expressions only; the source
+    /// (host, public address) comes from the web view's real address.
+    func saveToDictionary(english: String, japanese: String, pageURL: URL?) -> [String: Any] {
+        let isPaste = PasteSurface.isPasteURL(pageURL)
+        let host = (pageURL?.host ?? "").lowercased().replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
+        var copy = dictionary
+        let result = copy.add(english: english, japanese: japanese, source: isPaste ? DictionaryData.pasteSource : host, sourceURL: isPaste ? nil : pageURL)
+        switch result {
+        case .added:
+            let previous = dictionary
+            dictionary = copy
+            guard persistDictionary() else {
+                dictionary = previous          // never show it as saved when it is not on disk
+                return ["ok": false, "error": "save_failed", "message": dictionaryProblem ?? "辞書を保存できませんでした"]
+            }
+            return ["ok": true, "status": "saved"]
+        case .duplicate: return ["ok": true, "status": "duplicate"]
+        case .rejected(let r): return ["ok": false, "error": "rejected", "message": r.message]
+        }
+    }
+
+    func removeFromDictionary(ids: Set<UUID>) {
+        var copy = dictionary; copy.remove(ids: ids)
+        dictionary = copy; persistDictionary()
+    }
+
+    func setDictionaryNote(id: UUID, note: String) {
+        var copy = dictionary; copy.setNote(id: id, note: note)
+        guard copy != dictionary else { return }
+        dictionary = copy; persistDictionary()
+    }
+
+    /// Back in the foreground: if the file could not be read earlier (the phone was locked), try again.
+    func reloadDictionaryIfNeeded() {
+        guard !dictionaryStorage.isWritable else { return }
+        dictionary = dictionaryStorage.load()
+        dictionaryProblem = dictionaryStorage.lastLoadProblem
+    }
+
+    @discardableResult
+    private func persistDictionary() -> Bool {
+        let ok = dictionaryStorage.save(dictionary)
+        dictionaryProblem = ok ? nil : (dictionaryStorage.isWritable ? "辞書を保存できませんでした（空き容量を確認してください）" : (dictionaryStorage.lastLoadProblem ?? "辞書を保存できませんでした"))
+        return ok
     }
 
     // MARK: home screen: favorites and recent sites

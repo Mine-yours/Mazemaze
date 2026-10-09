@@ -45,6 +45,7 @@ window.webkit = { messageHandlers: { mazemaze: { postMessage: function (m) { ret
 window.__bridge = async function (msg) {
   var mk = window.__mock; mk.log.push(msg);
   if (msg.type === "ready") return { gen: mk.gen, enabled: mk.enabled, profile: mk.profile };
+  if (msg.type === "save") { if (mk.saveFail) throw new Error("save failed"); return { ok: true, status: mk.saveStatus || "saved" }; }
   if (msg.type !== "translate") return { ok: false, error: "rejected" };
   mk.inflight++; mk.maxInflight = Math.max(mk.maxInflight, mk.inflight);
   await new Promise(function (r) { setTimeout(r, mk.delay); });
@@ -439,6 +440,50 @@ for (const mode of ["ok", "xssen"]) {
   check("長い段落も完全復元", (await ev("document.body.innerHTML")) === before);
 }
 
+
+
+// ---- 13. "辞書に保存" button in the popover -----------------------------------------------------------------
+{
+  await load("static.html");
+  await settle();
+  await ev("window.__bodyClicks=0;window.addEventListener('click',function(){window.__bodyClicks++});0");   // bubble phase on window: sees whatever is not stopped
+  await tapEl("#p1 [data-mz-en]");
+  await sleep(150);
+  check("辞書: 英語部分のタップ自体もページのクリック処理へ伝播しない", (await ev("window.__bodyClicks")) === 0);
+  const en = await ev("document.querySelector('#p1 [data-mz-en]').textContent");
+  const popTxt = await ev("document.querySelector('[data-mazemaze-ui] span').textContent");
+  check("辞書: 吹き出しに「辞書に保存」ボタンがあり、日本語の原文も表示される", (await ev("(function(){var b=document.querySelector('[data-mazemaze-ui] button');return b&&b.textContent==='辞書に保存'})()")) && /[ぁ-ん一-龥]/.test(popTxt));
+  await tapEl("[data-mazemaze-ui] button");
+  await sleep(200);
+  const saves = await ev("window.__mock.log.filter(function(m){return m.type==='save'})");
+  check("辞書: 押すと { type, en, ja } だけを送る（英語は画面の英語、日本語は原文）", saves.length === 1 && Object.keys(saves[0]).sort().join() === "en,ja,type" && saves[0].en === en && saves[0].ja === popTxt, JSON.stringify(saves));
+  check("辞書: 保存後はボタンが「保存しました」になり、吹き出しは残る", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存しました");
+  check("辞書: ボタンを押してもページのクリック処理へ伝播しない", (await ev("window.__bodyClicks")) === 0);
+  await tapEl("[data-mazemaze-ui] button");
+  await sleep(150);
+  check("辞書: 連打しても 1 回しか送らない", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === 1);
+  await ev("window.__mock.saveStatus='duplicate';0");
+  await tapEl("body"); await sleep(100);
+  await tapEl("#p1 [data-mz-en]"); await sleep(150);
+  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
+  check("辞書: すでに保存済みなら「保存済みです」と出る", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存済みです");
+  await ev("window.__mock.saveFail=true;0");
+  await tapEl("body"); await sleep(100);
+  await tapEl("#p1 [data-mz-en]"); await sleep(150);
+  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
+  check("辞書: 保存に失敗したら「保存できませんでした」と出る（例外にならない）", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存できませんでした");
+  await ev("window.__mock.saveFail=false;window.__mock.saveStatus='saved';0");
+  await ev("document.querySelector('[data-mazemaze-ui] button').click()");          // a script's click (not trusted)
+  await sleep(200);
+  const before = await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length");
+  await ev("document.querySelector('[data-mazemaze-ui] button').click()");
+  await sleep(200);
+  check("辞書: 信頼されていない click() は送信を増やさない", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === before);
+  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
+  check("辞書: 失敗のあとでも、本物のタップなら再試行できる", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === before + 1 && (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存しました");
+  await ev("window.__mazemaze.restoreAll()");
+  check("辞書: 吹き出し・ボタンは原文復元の邪魔をしない（元のページと同じ）", (await count("[data-mz-en]")) === 0);
+}
 
 // ---- 12. paste page ("貼り付けて翻訳"): the app's own template, filled by paste_fill.js ----------------------
 {

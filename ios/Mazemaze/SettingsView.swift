@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var loadedToken = ""
     @State private var confirmClear = false
     @State private var xIdentity = true
+    @State private var autoHideBars = true
 
     var body: some View {
         NavigationStack {
@@ -74,6 +75,13 @@ struct SettingsView: View {
                     if let e = saveError { Text(e).font(.footnote).foregroundStyle(.red) }
                 } header: { Text("翻訳サーバー（Mac）") } footer: {
                     Text("接続先は Mac / ローカルネットワークのアドレスのみ入力できます。トークンはこの iPhone のキーチェーンにだけ保存され、閲覧中のページには渡されません。初回の接続時に「ローカルネットワーク」の許可を求められたら許可してください。\(model.settings.pinnedFingerprint != nil ? "いまの接続は暗号化されています。" : "いまの接続は暗号化されていません（HTTP）。自宅など信頼できる Wi-Fi でだけ使ってください。")")
+                }
+
+                Section {
+                    Toggle("スクロールでバーを隠す", isOn: $autoHideBars)
+                        .onChange(of: autoHideBars) { v in model.settings.autoHideBars = v; model.settings.flush(); if !v { model.active.revealBars() } }
+                } header: { Text("表示") } footer: {
+                    Text("ページを下にスクロールすると、アドレス欄とツールバーが隠れて、画面を広く使えます。上にスクロールするか、下の「メニューを表示」を押すと戻ります。VoiceOver 使用中は隠しません。")
                 }
 
                 Section("翻訳") {
@@ -143,6 +151,7 @@ struct SettingsView: View {
                 loadedURL = serverURL; loadedToken = token
                 ratioDraft = model.ratio
                 xIdentity = model.settings.safariIdentityForX
+                autoHideBars = model.settings.autoHideBars
             }
             .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft }; save() }
         }

@@ -49,6 +49,7 @@
   var nodeState = new WeakMap();      // text node -> {tries, status: "failed"}
   var pendingInfo = new WeakMap();    // text node -> {node, original, lead, trail, parts, partPieces, remaining}
   var sources = new WeakMap();        // english span -> original Japanese
+  var englishOf = new WeakMap();      // english span -> the English that was put on the page
   var registered = new Map();         // block element -> true
   var visible = new Set();            // block elements near the viewport
   var reappear = new WeakMap();       // text node -> times the page overwrote our change
@@ -273,6 +274,7 @@
     el.setAttribute("aria-label", piece.display);
     el.textContent = piece.display;       // text only, never HTML
     sources.set(el, piece.source);
+    englishOf.set(el, piece.display);
     setImportant(el, {
       "text-decoration": "underline", "text-decoration-thickness": "2px", "text-underline-offset": "3px",
       "background-color": "rgba(27,95,209,0.14)", "border-radius": "3px", "padding": "0.2em 0.12em",
@@ -606,6 +608,37 @@
   // ---- tap on English -> show the original --------------------------------------------------
   function hidePopover() { if (popover && popover.parentNode) popover.remove(); popover = null; }
 
+  // "辞書に保存": asks the app to keep this expression (English shown + the Japanese it replaced). Nothing is
+  // collected on its own; the app adds the page address, so the page cannot choose it.
+  function makeSaveButton(english, source) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("data-mazemaze-ui", "1");
+    b.textContent = "辞書に保存";
+    setImportant(b, {
+      "all": "initial", "display": "block", "box-sizing": "border-box", "margin-top": "8px", "min-height": "36px",
+      "padding": "6px 12px", "border-radius": "8px", "background": "#0a84ff", "color": "#ffffff",
+      "font": "600 14px/1.4 -apple-system, sans-serif", "text-align": "center", "cursor": "pointer"
+    });
+    b.addEventListener("click", function (e) {
+      e.preventDefault(); e.stopPropagation();
+      if (!e.isTrusted || b.__busy) return;          // only the person's own tap saves, never a script's click()
+      b.__busy = true;
+      function failed(why) {
+        b.textContent = typeof why === "string" && why ? why.slice(0, 60) : "保存できませんでした";
+        setImportant(b, { "background": "#c0392b" });
+        b.__busy = false;                            // may try again
+      }
+      ask({ type: "save", en: english, ja: source }).then(function (res) {
+        if (res && res.ok === true) {
+          b.textContent = res.status === "duplicate" ? "保存済みです" : "保存しました";
+          setImportant(b, { "background": "#30a46c" });
+        } else { failed(res && res.message); }
+      }, function () { failed(null); });
+    }, false);
+    return b;
+  }
+
   function showPopover(el, point) {
     hidePopover();
     var source = sources.get(el);
@@ -613,7 +646,11 @@
     var p = document.createElement("div");
     p.setAttribute("data-mazemaze-ui", "1");
     p.setAttribute("role", "status");
-    p.textContent = source;
+    var label = document.createElement("span");
+    label.textContent = source;                       // text only
+    p.appendChild(label);
+    var english = englishOf.get(el);
+    if (typeof english === "string" && english) p.appendChild(makeSaveButton(english, source));
     setImportant(p, {
       "all": "initial", "position": "absolute", "z-index": "2147483647", "box-sizing": "border-box",
       "max-width": "min(90vw, 360px)", "padding": "8px 12px", "border-radius": "10px",

@@ -235,6 +235,53 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             if let w = first.webView { web = w }       // the first tab may have slept and woken with a new web view
 
+            // ---- bars that slide away while reading
+            await load("/scroll.html")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            report("reading: the bars are shown when a page opens", !tab.barsHidden)
+            _ = await inPage("window.scrollTo(0, 150); 1")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            _ = await inPage("window.scrollTo(0, 800); 1")
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            report("reading: scrolling down slides the address bar and toolbar away", tab.barsHidden)
+            _ = await inPage("window.scrollBy(0, -90); 1")
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            report("reading: scrolling up brings them back", !tab.barsHidden)
+            _ = await inPage("window.scrollTo(0, 150); 1")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            _ = await inPage("window.scrollTo(0, 900); 1")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            tab.lastProblem = "テスト用の問題"
+            report("reading: a problem brings the bars back", !tab.barsHidden)
+            tab.lastProblem = nil
+            app.settings.autoHideBars = false
+            _ = await inPage("window.scrollTo(0, 100); 1")
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            _ = await inPage("window.scrollTo(0, 1000); 1")
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            report("reading: with the setting off the bars never hide", !tab.barsHidden)
+            app.settings.autoHideBars = true
+
+            // ---- dictionary: "辞書に保存" from the popover goes through the bridge
+            func bridge(_ body: String) async -> Any? {
+                await withCheckedContinuation { cont in
+                    web.callAsyncJavaScript("return await window.webkit.messageHandlers.mazemaze.postMessage(\(body))", arguments: [:], in: nil, in: BrowserCoordinator.world) { r in
+                        if case .success(let v) = r { cont.resume(returning: v) } else { cont.resume(returning: nil) }
+                    }
+                }
+            }
+            let dictBefore = app.dictionary.entries.count
+            let saved = await bridge(#"{type:"save", en:"good weather", ja:"良い天気"}"#) as? [String: Any]
+            report("dictionary: a save request stores the expression (with the page as its source)", (saved?["status"] as? String) == "saved" && app.dictionary.entries.count == dictBefore + 1 && app.dictionary.entries.first?.japanese == "良い天気" && !(app.dictionary.entries.first?.source.isEmpty ?? true), "\(saved ?? [:]) \(app.dictionary.entries.first.map { "\($0.source)" } ?? "-")")
+            let dup = await bridge(#"{type:"save", en:"Good  weather", ja:"良い天気"}"#) as? [String: Any]
+            report("dictionary: the same expression is reported as already saved", (dup?["status"] as? String) == "duplicate" && app.dictionary.entries.count == dictBefore + 1)
+            let bad = await bridge(#"{type:"save", en:"x", ja:"y", url:"https://evil.example/"}"#)
+            report("dictionary: a request with extra fields is refused", bad == nil && app.dictionary.entries.count == dictBefore + 1)
+            let reloaded = DictionaryStorage(fileURL: app.dictionaryStorage.fileURL).load()
+            report("dictionary: what was saved is on disk", reloaded.entries.count == dictBefore + 1 && reloaded.entries.first?.english == "good weather")
+            if let id = app.dictionary.entries.first?.id { app.removeFromDictionary(ids: [id]) }
+            report("dictionary: deleting removes it (and from disk)", app.dictionary.entries.count == dictBefore && DictionaryStorage(fileURL: app.dictionaryStorage.fileURL).load().entries.count == dictBefore)
+
             // ---- "貼り付けて翻訳": the app's own page, same pipeline, not a tab, not reachable from anywhere else
             let pasteLines = ["今日は晴れていて、散歩に出かけるのにちょうど良い天気です。", "", "短い", "<img src=x onerror=window.__xss=1>テストの文章がここにあります。これは日本語の文章です。", "もう一行、日本語のしっかりした長さの文章がここに入ります。それから続きます。"]
             let pasteOriginal = pasteLines.joined(separator: "\n")

@@ -5,13 +5,15 @@ struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var showSettings = false
     @State private var showTabs = false
+    @State private var showDictionary = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        PageScreen(tab: model.active, showSettings: $showSettings, showTabs: $showTabs)
+        PageScreen(tab: model.active, showSettings: $showSettings, showTabs: $showTabs, showDictionary: $showDictionary)
             .id(model.activeID)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
             .sheet(isPresented: $showTabs) { TabSwitcherView().environmentObject(model) }
+            .sheet(isPresented: $showDictionary) { DictionaryView().environmentObject(model) }
             .fullScreenCover(isPresented: $model.showPaste) { PasteTranslateView().environmentObject(model) }
             .onAppear {
                 #if DEBUG
@@ -19,6 +21,13 @@ struct ContentView: View {
                 switch SelfTest.value("-MazemazeShow") {
                 case "tabs"?: showTabs = true; return
                 case "settings"?: showSettings = true; return
+                case "dictionary"?:
+                    if SelfTest.value("-MazemazeDemoDictionary") == "1" {      // screenshots only
+                        for (en, ja, src) in [("good weather", "良い天気", "news.yahoo.co.jp"), ("Prime Minister", "首相", "x.com"), ("take a stroll", "散歩に出かける", DictionaryData.pasteSource)] {
+                            _ = model.saveToDictionary(english: en, japanese: ja, pageURL: src == DictionaryData.pasteSource ? PasteSurface.url : URL(string: "https://\(src)/a"))
+                        }
+                    }
+                    showDictionary = true; return
                 case "pairing"?: if let p = SelfTest.value("-MazemazePairGood") { model.receivePairing(p) }; return
                 default: break
                 }
@@ -45,13 +54,13 @@ struct ContentView: View {
                 if model.needsSetup { showSettings = true } else { model.warmupIfNeeded() }
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded() }
+                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
             }
             .onChange(of: model.pasteNonce) { _ in
                 // A full-screen cover cannot appear above an open sheet: close them first.
-                let hadSheet = showSettings || showTabs
-                showSettings = false; showTabs = false
+                let hadSheet = showSettings || showTabs || showDictionary
+                showSettings = false; showTabs = false; showDictionary = false
                 Task { @MainActor in
                     if hadSheet { try? await Task.sleep(nanoseconds: 500_000_000) }
                     model.presentPaste()
@@ -59,7 +68,7 @@ struct ContentView: View {
             }
             .onChange(of: model.pairingNonce) { _ in
                 // An alert cannot appear above an open sheet: close them, let the animation finish, then ask.
-                showSettings = false; showTabs = false; if model.showPaste { model.closePaste() }
+                showSettings = false; showTabs = false; showDictionary = false; if model.showPaste { model.closePaste() }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     model.pairingPromptVisible = true
@@ -100,30 +109,20 @@ struct PageScreen: View {
     @EnvironmentObject var model: AppModel
     @Binding var showSettings: Bool
     @Binding var showTabs: Bool
+    @Binding var showDictionary: Bool
     @FocusState private var addressFocused: Bool
     @State private var pendingSearch: String?
     @State private var showProblemDetail = false
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var addressError: String?
 
+    @State private var bottomH: CGFloat = 0           // address bar + toolbar (what the page is laid out around)
+    @State private var bottomFullH: CGFloat = 0       // ... plus the attention strip (what has to slide away)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
-        VStack(spacing: 0) {
-            addressBar
-            if tab.isLoading {
-                ProgressView(value: tab.progress).progressViewStyle(.linear).accessibilityLabel("読み込み中")
-            } else {
-                Color.clear.frame(height: 2)
-            }
-            ZStack {
-                if tab.showsHome {
-                    HomeView(tab: tab, showSettings: $showSettings)
-                } else {
-                    BrowserView(tab: tab)
-                    if let blocked = tab.blockedNavigation { blockedCard(blocked) }
-                }
-            }
-            statusLine
-            toolbar
+        Group {
+            if tab.showsHome { homeLayout } else { readingLayout }
         }
         .alert("エラーの内容", isPresented: $showProblemDetail) { Button("OK", role: .cancel) {} } message: { Text(tab.lastProblem ?? "") }
         .confirmationDialog(searchDialogTitle, isPresented: Binding(get: { pendingSearch != nil }, set: { if !$0 { pendingSearch = nil } }), titleVisibility: .visible) {
@@ -134,6 +133,83 @@ struct PageScreen: View {
             Button("キャンセル", role: .cancel) { pendingSearch = nil }
         } message: {
             Text("入力した語句が、外部の検索サービス（\(AddressInput.searchServiceName)）に送られます。ページ本文の翻訳とは別の通信です。")
+        }
+    }
+
+    /// Home screen: the bars stay put. The address bar sits just above the toolbar (thumb reach, and a page that does
+    /// not scroll keeps its top free).
+    private var homeLayout: some View {
+        VStack(spacing: 0) {
+            HomeView(tab: tab, showSettings: $showSettings)
+            attentionStrip
+            addressBar.background(.bar)
+            if !addressFocused { toolbar }
+        }
+    }
+
+    /// A page: it fills the screen and is laid out around the bottom bars (address bar + toolbar); they slide away
+    /// while reading.
+    private var readingLayout: some View {
+        GeometryReader { geo in
+            let hidden = tab.barsHidden
+            ZStack {
+                BrowserView(tab: tab, covered: UIEdgeInsets(top: 0, left: 0, bottom: hidden ? 0 : bottomH, right: 0))
+                    .ignoresSafeArea()
+                if let blocked = tab.blockedNavigation {
+                    blockedCard(blocked).padding(.bottom, bottomH)
+                }
+                // Keep the clock readable: the page scrolls under the status bar.
+                VStack(spacing: 0) {
+                    Rectangle().fill(.bar).frame(height: geo.safeAreaInsets.top)
+                    Spacer(minLength: 0)
+                }
+                .ignoresSafeArea(edges: .top).allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    VStack(spacing: 0) {
+                        attentionStrip                       // floats over the page: its height is not part of the layout
+                        VStack(spacing: 0) {
+                            addressBar.background(.bar)
+                            if !addressFocused { toolbar }
+                        }
+                        .background(GeometryReader { Color.clear.preference(key: BarHeightKey.self, value: ["bottom": $0.size.height]) })
+                    }
+                    .background(GeometryReader { Color.clear.preference(key: BarHeightKey.self, value: ["bottomFull": $0.size.height]) })
+                    .offset(y: hidden ? max(bottomH, bottomFullH) + geo.safeAreaInsets.bottom + 8 : 0)
+                    .allowsHitTesting(!hidden).accessibilityHidden(hidden)
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: hidden)
+                // A page's own keyboard must not push our bars up; the address field's keyboard must (it is down here).
+                .ignoresSafeArea(addressFocused ? [] : [.keyboard])
+                if hidden { revealHandle }
+            }
+            .onPreferenceChange(BarHeightKey.self) { v in
+                guard !addressFocused else { return }          // typing an address: leave the page's layout alone
+                if let b = v["bottom"], abs(b - bottomH) > 0.5 { bottomH = b }
+                if let b = v["bottomFull"], abs(b - bottomFullH) > 0.5 { bottomFullH = b }
+            }
+            .onChange(of: addressFocused) { focused in if focused { tab.revealBars() } }
+            #if DEBUG
+            .task { if SelfTest.value("-MazemazeFocusAddress") == "1" { try? await Task.sleep(nanoseconds: 6_000_000_000); addressFocused = true } }
+            #endif
+        }
+    }
+
+    /// Shown while the bars are away: one tap brings them back (scrolling up does too).
+    private var revealHandle: some View {
+        VStack {
+            Spacer()
+            Button { tab.revealBars() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.up").font(.caption.bold())
+                    Text(tab.displayHost.isEmpty ? "メニューを表示" : tab.displayHost).font(.caption).lineLimit(1)
+                }
+                .padding(.horizontal, 14).frame(minHeight: 32)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 6)
+            .accessibilityLabel("メニューを表示")
         }
     }
 
@@ -150,7 +226,8 @@ struct PageScreen: View {
                     .submitLabel(.go)
                     .focused($addressFocused)
                     .onSubmit(submitAddress)
-                    .padding(.horizontal, 12).padding(.vertical, 12)
+                    .font(.subheadline)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                     .accessibilityLabel("アドレス欄（URL または検索語）")
                     .overlay(alignment: .trailing) {
@@ -160,16 +237,19 @@ struct PageScreen: View {
                         }
                     }
                 if tab.isLoading {
-                    Button { tab.stopLoading?() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    Button { tab.stopLoading?() } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
                         .accessibilityLabel("読み込みを停止")
                 } else if !tab.showsHome {
-                    Button { tab.reload?() } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
+                    Button { tab.reload?() } label: { Image(systemName: "arrow.clockwise").frame(width: 40, height: 40) }
                         .accessibilityLabel("更新")
                 }
             }
             if let e = addressError { Text(e).font(.footnote).foregroundStyle(Color.red) }
         }
-        .padding(.horizontal, 10).padding(.top, 6)
+        .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 4)
+        .overlay(alignment: .top) {
+            if tab.isLoading { ProgressView(value: tab.progress).progressViewStyle(.linear).accessibilityLabel("読み込み中") }
+        }
     }
 
     private func submitAddress() {
@@ -212,20 +292,14 @@ struct PageScreen: View {
         .accessibilityAddTraits(.isModal)
     }
 
-    // MARK: status line
-    private var statusLine: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if !tab.showsHome {
-                HStack(spacing: 6) {
-                    if tab.inflight > 0 { ProgressView().controlSize(.mini) }
-                    Text(statusText).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
-                        .accessibilityAddTraits(.updatesFrequently)
-                    Spacer()
-                    if tab.okCount + tab.failCount > 0 {
-                        Text("英語化 \(tab.okCount) 箇所\(tab.failCount > 0 ? "・失敗 \(tab.failCount)" : "")")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }
+    // MARK: attention strip
+    /// Only what needs attention: a problem, a notice, or why this page is not translated. (The normal "translating /
+    /// N places" status is on the translation button.) It floats over the page, so it never moves the page around.
+    private var attentionStrip: some View {
+        let info = infoText
+        return VStack(alignment: .leading, spacing: 4) {
+            if let info {
+                Text(info).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
             if let n = tab.notice {
                 Label { Text(n).font(.footnote).foregroundStyle(.primary).lineLimit(3) } icon: { Image(systemName: "clock").foregroundStyle(Color.orange) }
@@ -238,16 +312,18 @@ struct PageScreen: View {
                 }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, tab.showsHome && tab.notice == nil && tab.lastProblem == nil ? 0 : 4)
+        .padding(.horizontal, 12).padding(.vertical, (info == nil && tab.notice == nil && tab.lastProblem == nil) ? 0 : 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
+        .background(.bar)
+        .accessibilityElement(children: .contain)
     }
 
-    private var statusText: String {
-        if tab.inflight > 0 {
-            return tab.okCount == 0 ? "翻訳中…（最初は 1 分ほどかかることがあります。順に英語になります）" : "翻訳中…（順に英語になります）"
-        }
-        return tab.siteStatus
+    /// Why the page is not being translated (or a first-time hint). Nil in the normal case.
+    private var infoText: String? {
+        guard !tab.showsHome, tab.inflight == 0 else { return nil }
+        let s = tab.siteStatus
+        if s == "翻訳: オン" || s == "翻訳: 待機中" || s == "翻訳: エラー" { return nil }
+        return s
     }
 
     @ViewBuilder private var problemButton: some View {
@@ -267,30 +343,46 @@ struct PageScreen: View {
             barButton("chevron.left", "戻る", "戻る", enabled: tab.canGoBack) { tab.goBack?() }
             barButton("chevron.right", "進む", "進む", enabled: tab.canGoForward) { tab.goForward?() }
             tabsButton
-            barButton(model.translationEnabled ? "character.bubble.fill" : "character.bubble",
-                      model.translationEnabled ? "翻訳オン" : "翻訳オフ",
-                      "翻訳（現在\(model.translationEnabled ? "オン" : "オフ")）。押すと\(model.translationEnabled ? "オフにして全ページを原文に戻します" : "オンにします")", enabled: true) {
-                if !model.translationEnabled { tab.suspendedForPage = false }
-                model.translationEnabled.toggle()
-            }
-            if tab.suspendedForPage {
-                barButton("arrow.triangle.2.circlepath", "再翻訳", "このページをもう一度翻訳する", enabled: model.translationEnabled) { tab.resumeTranslation() }
-            } else {
-                barButton("arrow.uturn.backward", "原文に戻す", "このページだけ原文に戻す", enabled: model.translationEnabled && !tab.showsHome) { tab.restoreOriginal() }
-            }
+            translateButton
+            barButton("character.book.closed", "辞書", "辞書を開く（保存した英語表現 \(model.dictionary.entries.count) 件）", enabled: true) { showDictionary = true }
             moreMenu
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
+        .padding(.horizontal, 8).padding(.vertical, 2)
         .background(.bar)
+    }
+
+    /// Translation on/off. While translating it shows a spinner; afterwards how many places were turned into English.
+    private var translateButton: some View {
+        Button {
+            if !model.translationEnabled { tab.suspendedForPage = false }
+            model.translationEnabled.toggle()
+        } label: {
+            VStack(spacing: 1) {
+                Image(systemName: model.translationEnabled ? "character.bubble.fill" : "character.bubble").font(.body)
+                    .overlay(alignment: .topTrailing) {
+                        if model.translationEnabled && !tab.showsHome {
+                            if tab.inflight > 0 { ProgressView().controlSize(.mini).offset(x: 12, y: -6) }
+                            else if tab.okCount > 0 {
+                                Text("\(tab.okCount)").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 4).background(Color.accentColor, in: Capsule()).offset(x: 14, y: -7)
+                            }
+                        }
+                    }
+                if !typeSize.isAccessibilitySize { Text(model.translationEnabled ? "翻訳オン" : "翻訳オフ").font(.caption2).lineLimit(1).minimumScaleFactor(0.7) }
+            }
+            .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .accessibilityLabel("翻訳（現在\(model.translationEnabled ? "オン" : "オフ")）。\(tab.inflight > 0 ? "翻訳中です。" : (tab.okCount > 0 ? "英語化 \(tab.okCount) 箇所。" : ""))押すと\(model.translationEnabled ? "オフにして全ページを原文に戻します" : "オンにします")")
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private var tabsButton: some View {
         Button { showTabs = true } label: {
             VStack(spacing: 2) {
-                Image(systemName: "square.on.square").font(.title3)
+                Image(systemName: "square.on.square").font(.body)
                 if !typeSize.isAccessibilitySize { Text("タブ \(model.tabs.count)").font(.caption2).lineLimit(1).minimumScaleFactor(0.7) }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 40)
         }
         .accessibilityLabel("タブ一覧（\(model.tabs.count) 個）")
     }
@@ -316,10 +408,10 @@ struct PageScreen: View {
             Button { showSettings = true } label: { Label("設定", systemImage: "gearshape") }
         } label: {
             VStack(spacing: 2) {
-                Image(systemName: "ellipsis.circle").font(.title3)
+                Image(systemName: "ellipsis.circle").font(.body)
                 if !typeSize.isAccessibilitySize { Text("メニュー").font(.caption2).lineLimit(1).minimumScaleFactor(0.7) }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 40)
         }
         .accessibilityLabel("その他のメニュー")
     }
@@ -327,12 +419,18 @@ struct PageScreen: View {
     private func barButton(_ symbol: String, _ caption: String, _ a11y: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: symbol).font(.title3)
+                Image(systemName: symbol).font(.body)
                 if !typeSize.isAccessibilitySize { Text(caption).font(.caption2).lineLimit(1).minimumScaleFactor(0.7) }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 40)
         }
         .disabled(!enabled)
         .accessibilityLabel(a11y)
     }
+}
+
+/// Reports the heights of the two bars to the screen that lays the page out around them.
+private struct BarHeightKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue()) { $1 } }
 }

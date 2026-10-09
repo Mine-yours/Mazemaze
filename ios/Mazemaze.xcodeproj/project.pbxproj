@@ -24,6 +24,7 @@
 		B87E46209AE4D59F592BE096 /* Resources/paste_text.js in Resources */ = {isa = PBXBuildFile; fileRef = 88190A352D59D2E83E85BC42 /* Resources/paste_text.js */; };
 		B9F97151124E95139F86D795 /* TabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821BAE9A18D5674DAA960694 /* TabModel.swift */; };
 		CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F529774BF11EA85B1A85540F /* SelfTest.swift */; };
+		DA3E1845DA737557CD2A170C /* DictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED12BD1755214971420FCA8 /* DictionaryView.swift */; };
 		F599865DB12219E28A1168BB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */; };
 /* End PBXBuildFile section */
 
@@ -33,6 +34,7 @@
 		24E300CCF8249C399A82921D /* Resources/translator.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/translator.js; sourceTree = "<group>"; };
 		25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteTranslateView.swift; sourceTree = "<group>"; };
+		4ED12BD1755214971420FCA8 /* DictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryView.swift; sourceTree = "<group>"; };
 		53E9C604AC6013CFC0F8EB6B /* Resources/paste.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = Resources/paste.html; sourceTree = "<group>"; };
 		696CE3428F7BB0D432046046 /* Resources/paste_fill.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/paste_fill.js; sourceTree = "<group>"; };
 		821BAE9A18D5674DAA960694 /* TabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabModel.swift; sourceTree = "<group>"; };
@@ -76,6 +78,7 @@
 				8B4C98DC756CC98573D4A8D7 /* Bench.swift */,
 				14BC652CBAB00934BF0C021B /* BrowserView.swift */,
 				25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */,
+				4ED12BD1755214971420FCA8 /* DictionaryView.swift */,
 				C4D155372C8AE34D1B4DAA9C /* HomeView.swift */,
 				900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */,
 				A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */,
@@ -186,6 +189,7 @@
 				3322BEC1C8E20C588D57F90D /* Bench.swift in Sources */,
 				598ECA083E8EED53CC291A81 /* BrowserView.swift in Sources */,
 				9E0BF8DF6A2ACE7388B73DA7 /* ContentView.swift in Sources */,
+				DA3E1845DA737557CD2A170C /* DictionaryView.swift in Sources */,
 				73B9F094621BE07E61A3CF8C /* HomeView.swift in Sources */,
 				AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */,
 				77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */,

@@ -34,18 +34,20 @@ final class TabModel: ObservableObject, Identifiable {
     @Published var isLoading = false
     @Published var progress = 0.0
     @Published var pageTitle = ""
-    @Published var blockedNavigation: BlockedNavigation?
+    @Published var blockedNavigation: BlockedNavigation? { didSet { if blockedNavigation != nil { revealBars() } } }
     @Published var suspendedForPage = false          // "原文に戻す" pressed: off for this page only
     @Published var siteStatus = "翻訳: 待機中"
     @Published var inflight = 0
     @Published var okCount = 0
     @Published var failCount = 0
-    @Published var lastProblem: String?              // needs the user to do something (red)
+    @Published var lastProblem: String? { didSet { if lastProblem != nil { revealBars() } } }   // needs the user to do something (red)
     @Published var problemAction: ProblemAction?
-    @Published var notice: String?                   // recovers by itself (orange): Mac busy, paused
+    @Published var notice: String? { didSet { if notice != nil { revealBars() } } }   // recovers by itself (orange): Mac busy, paused
     @Published private(set) var webView: WKWebView?
     @Published private(set) var restoreURL: URL?     // where a sleeping tab continues
     @Published var restoredTitle: String?
+    @Published private(set) var barsHidden = false   // the address bar / toolbar have slid away (reading)
+    private var bars = BarVisibility()
     var lastActive = Date()
     private(set) var coordinator: BrowserCoordinator?
 
@@ -65,6 +67,24 @@ final class TabModel: ObservableObject, Identifiable {
         restoreURL = url; restoredTitle = title
         if let url { addressText = url.absoluteString; currentURL = url }
     }
+
+    // MARK: bars that slide away while reading
+    /// Every change of the page's scroll position. `minOffset` is the offset at the very top.
+    func scrolled(offset: Double, minOffset: Double, userDriven: Bool) {
+        guard app.settings.autoHideBars, !UIAccessibility.isVoiceOverRunning, !showsHome, blockedNavigation == nil, lastProblem == nil else {
+            if barsHidden { revealBars() }
+            return
+        }
+        if bars.update(offset: offset, minOffset: minOffset, now: ProcessInfo.processInfo.systemUptime, userDriven: userDriven) { barsHidden = bars.hidden }
+    }
+
+    func revealBars() {
+        bars.reveal(now: ProcessInfo.processInfo.systemUptime)
+        if barsHidden { barsHidden = false }
+    }
+
+    /// A different page is shown: start with the bars visible.
+    func resetBars() { bars.reset(); if barsHidden { barsHidden = false } }
 
     // MARK: state of the tab
     /// The home screen is shown while the tab has neither a page nor a place to continue from.
@@ -113,6 +133,7 @@ final class TabModel: ObservableObject, Identifiable {
         loadURL = nil; goBack = nil; goForward = nil; reload = nil; stopLoading = nil
         isLoading = false; progress = 0; canGoBack = false; canGoForward = false
         blockedNavigation = nil
+        resetBars()
         resetCounters(); inflight = 0
         suspendedForPage = false
         Task { [id, app] in _ = await app.service.bumpGeneration(scope: id) }      // a sleeping tab must not keep a place in the queue
@@ -135,6 +156,7 @@ final class TabModel: ObservableObject, Identifiable {
         loadURL = nil; goBack = nil; goForward = nil; reload = nil; stopLoading = nil
         isLoading = false; progress = 0; canGoBack = false; canGoForward = false
         blockedNavigation = nil; resetCounters(); inflight = 0; suspendedForPage = false
+        resetBars()
         Task { [id, app] in _ = await app.service.bumpGeneration(scope: id) }      // the closed page must not keep a place in the queue
         app.tabsChanged()
     }

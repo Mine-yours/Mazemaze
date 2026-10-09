@@ -41,6 +41,7 @@ public final class SettingsStore: @unchecked Sendable {
         static let serverName = "mazemaze.serverName"
         static let restoreTabs = "mazemaze.restoreTabs"
         static let safariIdentityForX = "mazemaze.safariIdentityForX"
+        static let autoHideBars = "mazemaze.autoHideBars"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
     }
@@ -89,6 +90,12 @@ public final class SettingsStore: @unchecked Sendable {
     public var safariIdentityForX: Bool {
         get { defaults.object(forKey: Key.safariIdentityForX) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
+    }
+
+    /// The address bar and toolbar slide away while reading (scroll down) and return on scrolling up. On by default.
+    public var autoHideBars: Bool {
+        get { defaults.object(forKey: Key.autoHideBars) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.autoHideBars) }
     }
 
     public var restoreTabs: Bool {

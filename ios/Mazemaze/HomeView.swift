@@ -31,7 +31,7 @@ struct HomeView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Mazemaze").font(.largeTitle).bold()
-            Text("日本語の記事を、英語混じりで読むためのブラウザです。上のアドレス欄に URL か検索語を入力するか、下から選んでください。")
+            Text("日本語の記事を、英語混じりで読むためのブラウザです。下のアドレス欄に URL か検索語を入力するか、ここから選んでください。")
                 .font(.subheadline).foregroundStyle(.secondary)
         }
     }
