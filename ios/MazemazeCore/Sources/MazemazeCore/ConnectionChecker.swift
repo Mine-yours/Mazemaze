@@ -20,7 +20,7 @@ public enum ConnectionChecker {
     }
 
     public static func describe(_ error: Error, scheme: String? = nil) -> String {
-        let generic = "Mac に接続できません。Mac で ./scripts/run_lan.sh が動いているか、iPhone と同じ Wi-Fi か、iPhone の「設定 > Mazemaze > ローカルネットワーク」が許可されているか確認してください。"
+        let generic = "Mac に接続できません。Mac で ./scripts/run_lan.sh が動いているか、iPhone と同じ Wi-Fi か（家の外では iPhone の Tailscale がオンで、Mac でも Tailscale が動いているか）、iPhone の「設定 > Mazemaze > ローカルネットワーク」が許可されているか確認してください。"
         guard let e = error as? URLError else { return generic }
         if isCertificateError(e) { return TranslationFailure.certificateUntrusted.message }
         if scheme == "http", isProtocolMismatch(e) {
@@ -49,6 +49,13 @@ public enum ConnectionChecker {
         if let t = config.token, !t.isEmpty { headers["X-Mazemaze-Token"] = t }
         if let resolver { await resolver.invalidate() }          // a manual check looks at both addresses again
         let base = await resolver?.resolve(config) ?? config.baseURL
+        let probes = await resolver?.lastProbes ?? []
+        /// Which addresses were tried, so "timed out" can be told apart (home address vs. Tailscale vs. none configured).
+        func withDetails(_ message: String) -> String {
+            var lines = probes.map { "・\($0.role.rawValue): \($0.outcome.text)" }
+            if config.tailscaleURL == nil { lines.append("・Tailscale（外出先）: この設定には入っていません（Mac で run_lan.sh を最新にして起動し、新しい QR を読み取り直してください）") }
+            return lines.isEmpty || probes.contains(where: { $0.outcome == .answered }) ? message : message + "\n確認した接続先:\n" + lines.joined(separator: "\n")
+        }
         let req = HTTPRequest(url: base.appendingPathComponent("api/status"), method: "GET", headers: headers, timeout: 8)
         let response: HTTPResponse
         do {
@@ -56,7 +63,7 @@ public enum ConnectionChecker {
         } catch is PinMismatchError {
             return ConnectionReport(state: .failed, message: TranslationFailure.pinMismatch.message, model: nil)
         } catch {
-            return ConnectionReport(state: .failed, message: describe(error, scheme: base.scheme), model: nil)
+            return ConnectionReport(state: .failed, message: withDetails(describe(error, scheme: base.scheme)), model: nil)
         }
         switch response.status {
         case 200:

@@ -50,8 +50,13 @@ struct DictionaryView: View {
 
     private func row(_ e: DictionaryEntry) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(e.english).font(.headline)
-            Text(e.japanese).font(.subheadline).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(e.english).font(.headline)
+                if e.kind == .word { Text("単語").font(.caption2).padding(.horizontal, 6).padding(.vertical, 1).background(Color(.tertiarySystemFill), in: Capsule()) }
+            }
+            meaningLine(e)
+            if e.kind == .word, !e.contextEnglish.isEmpty { Text(verbatim: e.contextEnglish).font(.footnote).lineLimit(2) }
+            if e.kind == .word, !e.contextJapanese.isEmpty { Text(verbatim: e.contextJapanese).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
             HStack(spacing: 6) {
                 if !e.source.isEmpty { Text(e.source) }
                 Text(e.savedAt, style: .date)
@@ -62,6 +67,19 @@ struct DictionaryView: View {
         .frame(minHeight: 44, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
+
+    /// The meaning of a word, or what is happening to it (looked up in the background), or the Japanese of an expression.
+    @ViewBuilder private func meaningLine(_ e: DictionaryEntry) -> some View {
+        if e.kind == .word, e.card == nil, e.meaning == .pending {
+            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("意味を調べています…").font(.subheadline).foregroundStyle(.secondary) }
+        } else if e.kind == .word, e.card == nil, e.meaning == .failed {
+            Text("意味を取得できませんでした（項目を開いてやり直せます）").font(.subheadline).foregroundStyle(.orange)
+        } else if !e.japanese.isEmpty {
+            Text(e.japanese).font(.subheadline).foregroundStyle(.secondary)
+            if let h = e.card?.headline, h != e.japanese { Text(h).font(.footnote).foregroundStyle(.secondary).lineLimit(2) }
+        }
+    }
+
 }
 
 /// The CSV is written only when the person actually shares it (never kept around), from the data as it is then.
@@ -92,6 +110,7 @@ private struct DictionaryDetailView: View {
     @State private var loaded = false
     @State private var confirmDelete = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var lookup: LookupSession?
     @Environment(\.scenePhase) private var scenePhase
 
     private var entry: DictionaryEntry? { model.dictionary.entries.first { $0.id == id } }
@@ -100,7 +119,30 @@ private struct DictionaryDetailView: View {
         Form {
             if let e = entry {
                 Section("英語") { Text(e.english).font(.title3).textSelection(.enabled) }
-                Section("元の日本語") { Text(e.japanese).font(.title3).textSelection(.enabled) }
+                if e.kind == .word {
+                    Section("意味") {
+                        if e.card == nil, e.meaning == .pending {
+                            HStack(spacing: 8) { ProgressView(); Text("調べています（Mac が空いたときに、自動で調べます）").foregroundStyle(.secondary) }
+                        } else if e.card == nil, e.meaning == .failed {
+                            Label("意味を取得できませんでした", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            Button("もう一度、自動で調べる") { model.retryMeaning(entryID: e.id) }.frame(minHeight: 44)
+                        } else if !e.japanese.isEmpty { Text(e.japanese).font(.title3).textSelection(.enabled) }
+                    }
+                    if !e.contextEnglish.isEmpty || !e.contextJapanese.isEmpty {
+                        Section("原文") {
+                            if !e.contextEnglish.isEmpty { Text(verbatim: e.contextEnglish).textSelection(.enabled) }
+                            if !e.contextJapanese.isEmpty { Text(verbatim: e.contextJapanese).foregroundStyle(.secondary).textSelection(.enabled) }
+                        }
+                    }
+                } else {
+                    Section("元の日本語") { Text(e.japanese).font(.title3).textSelection(.enabled) }
+                }
+                Section {
+                    if let card = e.card { CardContent(card: card) }
+                    Button(e.card == nil ? "意味を調べる" : "意味を調べ直す") { lookup = model.lookupSession(for: e) }.frame(minHeight: 44)
+                } header: { Text(e.card == nil ? "詳しい意味" : "詳しい意味（AI が作成）") } footer: {
+                    if e.card == nil { Text("Mac のローカルモデルで、単語の意味や句の解説を調べて、この項目に残します。") }
+                }
                 Section("出典") {
                     Text(e.source.isEmpty ? "（不明）" : e.source)
                     Text(e.savedAt, format: .dateTime.year().month().day().hour().minute()).foregroundStyle(.secondary)
@@ -118,6 +160,7 @@ private struct DictionaryDetailView: View {
                 Text("この項目は削除されました").foregroundStyle(.secondary)
             }
         }
+        .sheet(item: $lookup) { LookupSheet(session: $0).environmentObject(model) }
         .navigationTitle("辞書の項目")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { if !loaded, let e = entry { note = e.note; loaded = true } }

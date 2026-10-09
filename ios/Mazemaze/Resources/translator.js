@@ -608,35 +608,78 @@
   // ---- tap on English -> show the original --------------------------------------------------
   function hidePopover() { if (popover && popover.parentNode) popover.remove(); popover = null; }
 
-  // "辞書に保存": asks the app to keep this expression (English shown + the Japanese it replaced). Nothing is
-  // collected on its own; the app adds the page address, so the page cannot choose it.
-  function makeSaveButton(english, source) {
+  // Buttons in the popover. Each one asks the app for something; a script's click() does nothing (only the person's tap counts).
+  function makeActionButton(text, background, onTap) {
     var b = document.createElement("button");
     b.type = "button";
     b.setAttribute("data-mazemaze-ui", "1");
-    b.textContent = "辞書に保存";
+    b.textContent = text;
     setImportant(b, {
-      "all": "initial", "display": "block", "box-sizing": "border-box", "margin-top": "8px", "min-height": "36px",
-      "padding": "6px 12px", "border-radius": "8px", "background": "#0a84ff", "color": "#ffffff",
+      "all": "initial", "display": "block", "box-sizing": "border-box", "margin-top": "8px", "min-height": "36px", "width": "100%",
+      "padding": "6px 12px", "border-radius": "8px", "background": background, "color": "#ffffff",
       "font": "600 14px/1.4 -apple-system, sans-serif", "text-align": "center", "cursor": "pointer"
     });
     b.addEventListener("click", function (e) {
       e.preventDefault(); e.stopPropagation();
-      if (!e.isTrusted || b.__busy) return;          // only the person's own tap saves, never a script's click()
+      if (!e.isTrusted || b.__busy) return;
       b.__busy = true;
-      function failed(why) {
-        b.textContent = typeof why === "string" && why ? why.slice(0, 60) : "保存できませんでした";
-        setImportant(b, { "background": "#c0392b" });
-        b.__busy = false;                            // may try again
-      }
-      ask({ type: "save", en: english, ja: source }).then(function (res) {
-        if (res && res.ok === true) {
-          b.textContent = res.status === "duplicate" ? "保存済みです" : "保存しました";
-          setImportant(b, { "background": "#30a46c" });
-        } else { failed(res && res.message); }
-      }, function () { failed(null); });
+      onTap(b, function (label, color, again) {
+        b.textContent = label;
+        setImportant(b, { "background": color });
+        if (again) b.__busy = false;                   // may try again
+      });
     }, false);
     return b;
+  }
+
+  // "辞書に保存": asks the app to keep this expression (English shown + the Japanese it replaced). Nothing is
+  // collected on its own; the app adds the page address, so the page cannot choose it.
+  function makeSaveButton(english, source) {
+    return makeActionButton("辞書に保存", "#0a84ff", function (b, done) {
+      ask({ type: "save", en: english, ja: source }).then(function (res) {
+        if (res && res.ok === true) done(res.status === "duplicate" ? "保存済みです" : "保存しました", "#30a46c", false);
+        else done(typeof (res && res.message) === "string" && res.message ? res.message.slice(0, 60) : "保存できませんでした", "#c0392b", true);
+      }, function () { done("保存できませんでした", "#c0392b", true); });
+    });
+  }
+
+  // "意味を調べる": the app opens its own sheet (the card never reaches the page).
+  function makeLookupButton(label, kind, term, english, source, p) {
+    return makeActionButton(label, "#5e5ce6", function (b, done) {
+      ask({ type: "lookup", kind: kind, term: term, en: english, ja: source }).then(function (res) {
+        if (res && res.ok === true) hidePopoverNow(p);
+        else done("開けませんでした", "#c0392b", true);
+      }, function () { done("開けませんでした", "#c0392b", true); });
+    });
+  }
+
+  function hidePopoverNow(p) { if (popover === p) hidePopover(); }
+
+  var WORD_RE = /[A-Za-z]+(?:['\u2019-][A-Za-z]+)*/g;
+  function wordsOf(text) {
+    var out = [], seen = {}, m;
+    WORD_RE.lastIndex = 0;
+    while ((m = WORD_RE.exec(text))) { var k = m[0].toLowerCase(); if (!seen[k] && m[0].length <= 40) { seen[k] = 1; out.push(m[0]); } }
+    return out;
+  }
+
+  // The word under the finger inside an English span (null when it cannot be told).
+  function wordAt(el, x, y) {
+    try {
+      var node = el.firstChild;
+      if (!node || node.nodeType !== 3 || !(x || y)) return null;
+      var range = null;
+      if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+      else if (document.caretPositionFromPoint) {
+        var pos = document.caretPositionFromPoint(x, y);
+        if (pos) { range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); }
+      }
+      if (!range || range.startContainer !== node) return null;
+      var t = node.nodeValue, offset = range.startOffset, m;
+      WORD_RE.lastIndex = 0;
+      while ((m = WORD_RE.exec(t))) { if (offset >= m.index && offset <= m.index + m[0].length) return m[0]; }
+    } catch (e) { /* no word */ }
+    return null;
   }
 
   function showPopover(el, point) {
@@ -650,7 +693,16 @@
     label.textContent = source;                       // text only
     p.appendChild(label);
     var english = englishOf.get(el);
-    if (typeof english === "string" && english) p.appendChild(makeSaveButton(english, source));
+    if (typeof english === "string" && english) {
+      var words = wordsOf(english);
+      var tapped = point ? wordAt(el, point.x, point.y) : null;
+      if (words.length === 1) p.appendChild(makeLookupButton("「" + words[0] + "」の意味を調べる", "word", words[0], english, source, p));
+      else if (words.length > 1) {
+        if (tapped) p.appendChild(makeLookupButton("「" + tapped + "」の意味を調べる", "word", tapped, english, source, p));
+        if (english.length <= 300) p.appendChild(makeLookupButton("句全体の意味を調べる", "phrase", english, english, source, p));
+      }
+      p.appendChild(makeSaveButton(english, source));
+    }
     setImportant(p, {
       "all": "initial", "position": "absolute", "z-index": "2147483647", "box-sizing": "border-box",
       "max-width": "min(90vw, 360px)", "padding": "8px 12px", "border-radius": "10px",
@@ -681,7 +733,10 @@
       e.preventDefault();
       e.stopPropagation();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      if (popover && popover.__for === en) hidePopover(); else { showPopover(en, { x: e.clientX, y: e.clientY }); if (popover) popover.__for = en; }
+      var w = wordAt(en, e.clientX, e.clientY);
+      // The same word (or the same span without a word) closes the popover; another word in the span shows its own buttons.
+      if (popover && popover.__for === en && (popover.__word || null) === (w || null)) hidePopover();
+      else { showPopover(en, { x: e.clientX, y: e.clientY }); if (popover) { popover.__for = en; popover.__word = w || null; } }
     } else if (popover && !(t && popover.contains && popover.contains(t))) {
       hidePopover();
     }

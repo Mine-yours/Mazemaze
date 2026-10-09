@@ -11,6 +11,7 @@ from typing import Callable
 
 from backend.config import (ADAPTERS, BATCH_MAX_CHARS, BATCH_MAX_SPANS, MAX_SPANS, Settings,
                             validate_model)
+from backend import define as definer
 from backend.display import format_segments, joined, outside_preserved
 from backend.llm.base import OllamaError
 from backend.llm.ollama_client import OllamaClient, assert_local_entry
@@ -32,6 +33,7 @@ _ERROR_STATUS = {
     "internal_error": (500, "内部エラーが発生しました。再試行してください。"),
     "model_rejected": (503, "このモデルはローカルモデルとして確認できないため、使用できません。"),
     "busy": (429, "別の変換を処理中です。完了してからもう一度お試しください。"),
+    "define_unsupported": (501, "いま設定されているモデルでは、単語の意味を調べられません。Qwen のモデルで使ってください。"),
 }
 
 
@@ -146,6 +148,24 @@ class TranslationService:
         if item.error_type:
             raise ServiceError(item.error_type)
         return {"ok": True, "elapsed_ms": int((self._clock() - started) * 1000)}
+
+    # -- word / phrase cards ------------------------------------------------------------------
+    def define(self, kind: str, term: str, context_en: str, context_ja: str, detail: str = "basic", sense: str = "") -> dict:
+        """One card for a learner's dictionary. Caller must hold the lock. Raises ServiceError."""
+        started = self._clock()
+        self.check_model()
+        if self.settings.model != "qwen3.5:9b":       # the translation-only model cannot follow this prompt
+            raise ServiceError("define_unsupported")
+        client = self._client_factory(min(self.settings.call_timeout, 90.0))
+        try:
+            resp, _ = client.chat(definer.build_payload(self.settings.model, kind, term, context_en, context_ja, detail, sense))  # type: ignore[arg-type]
+        except OllamaError as exc:
+            raise ServiceError(exc.error_type) from None
+        message = resp.get("message") if isinstance(resp, dict) and isinstance(resp.get("message"), dict) else {}
+        card = definer.parse_card(kind, message.get("content"), detail, context_ja)  # type: ignore[arg-type]
+        if card is None:
+            raise ServiceError("invalid_response")
+        return {"card": card, "model": self.settings.model, "elapsed_ms": int((self._clock() - started) * 1000)}
 
     # -- translation --------------------------------------------------------------------------
     def try_acquire(self) -> bool:

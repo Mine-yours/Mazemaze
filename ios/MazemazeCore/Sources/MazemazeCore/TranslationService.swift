@@ -11,6 +11,13 @@ public struct SystemClock: ServiceClock {
     public func sleep(seconds: Double) async throws { try await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000)) }
 }
 
+/// The answer to a word / phrase lookup (a card made by the local model).
+public enum DefinitionOutcome: Equatable, Sendable {
+    case success(DefinitionCard)
+    case more(DefinitionMore)            // the second step (an example, expressions / points, synonyms)
+    case failure(TranslationFailure)
+}
+
 public enum TranslationFailure: Equatable, Sendable {
     case stale, cancelled, notConfigured, unauthorized, busy, unreachable, timeout, invalidResponse, limitReached, pinMismatch, certificateUntrusted
     case rejected(String), server(String), breakerOpen(Int)
@@ -42,7 +49,7 @@ public enum TranslationFailure: Equatable, Sendable {
         case .notConfigured: return "翻訳サーバーが未設定です（設定で URL を入力）"
         case .unauthorized: return "トークンが違います。Mac の QR をカメラで読み取り直すか、設定を確認してください"
         case .busy: return "Mac が他の翻訳を処理中です。空き次第、自動で続きます"
-        case .unreachable: return "Mac に接続できません。Mac で run_lan.sh が動いているか、同じ Wi-Fi か、iPhone の設定 > Mazemaze > ローカルネットワークが許可されているか確認してください（Mac のスリープ中も繋がりません）"
+        case .unreachable: return "Mac に接続できません。Mac で run_lan.sh が動いているか、同じ Wi-Fi か（家の外では iPhone の Tailscale がオンか）、iPhone の設定 > Mazemaze > ローカルネットワークが許可されているか確認してください（Mac のスリープ中も繋がりません）"
         case .timeout: return "Mac の応答が遅すぎます。しばらくして、ページを開き直してください"
         case .invalidResponse: return "翻訳サーバーの応答を読み取れませんでした"
         case .limitReached: return "このページの翻訳回数の上限に達しました。ページを再読み込みすると続きます"
@@ -82,6 +89,8 @@ public actor TranslationService {
         public var breakerThreshold = 3
         public var breakerCooldown: TimeInterval = 30
         public var maxRequestsPerGeneration = 600
+        /// A lookup in the background (a saved word's meaning) only starts after this long without any translation.
+        public var backgroundIdle: TimeInterval = 15
         public init() {}
     }
 
@@ -192,7 +201,12 @@ public actor TranslationService {
         }
         waiters = live
         guard !waiters.isEmpty else { busy = false; return }
-        let index = waiters.firstIndex(where: { $0.scope == activeScope }) ?? 0
+        // A person is waiting for a lookup card: it goes first, then the tab on screen.
+        // Order: a lookup the person waits for, the tab on screen, any other tab, and last the background lookups.
+        let index = waiters.firstIndex(where: { $0.scope == Self.lookupScope })
+            ?? waiters.firstIndex(where: { $0.scope == activeScope })
+            ?? waiters.firstIndex(where: { $0.scope != Self.backgroundScope })
+            ?? 0
         let w = waiters.remove(at: index)
         w.cont.resume(returning: true)          // hand the slot over
     }
@@ -226,8 +240,108 @@ public actor TranslationService {
     }
     private func noteSuccess() { consecutiveFailures = 0; breakerOpenUntil = nil }
 
+    // MARK: lookup (word / phrase cards)
+    /// The queue scope of lookups. They share the single slot to the Mac with translation but go first.
+    static let lookupScope = -1
+    /// Background lookups (the meaning of a saved word) wait for a quiet moment and always go last.
+    static let backgroundScope = -2
+    private var lastTranslateActivity: TimeInterval?
+    private var defineCache: [String: DefinitionOutcome] = [:]
+    private var defineOrder: [String] = []
+
+    /// Ask the Mac for a card. The person is waiting, so it jumps the queue and is patient with a busy server.
+    /// Results are kept in memory only (the dictionary stores the ones the person saves).
+    public func define(_ request: LookupRequest, more: Bool = false, sense: String = "", background: Bool = false) async -> DefinitionOutcome {
+        guard let cfg = config() else { return .failure(.notConfigured) }
+        let key = cfg.baseURL.absoluteString + "|" + request.id + "|" + (more ? "more:" + sense : "basic")
+        if let hit = defineCache[key] { return hit }
+        if Task.isCancelled { return .failure(.cancelled) }
+        let scope = background ? Self.backgroundScope : Self.lookupScope
+        if background {
+            // Reading comes first: wait until no translation has been asked for (or running) for a while.
+            while busy || (lastTranslateActivity.map { clock.now() - $0 < options.backgroundIdle } ?? false) {
+                do { try await clock.sleep(seconds: 2) } catch { return .failure(.cancelled) }
+                if Task.isCancelled { return .failure(.cancelled) }
+            }
+        }
+        let gen = generation(of: scope)
+        guard await acquire(scope: scope, gen: gen) else { return .failure(Task.isCancelled ? .cancelled : .stale) }
+        defer { release() }
+        guard gen == generation(of: scope) else { return .failure(.stale) }
+        guard let cfg = config() else { return .failure(.notConfigured) }          // the settings may have changed while waiting
+
+        struct Body: Encodable { let kind: String; let term: String; let context_en: String; let context_ja: String; let detail: String; let sense: String }
+        guard let body = try? JSONEncoder().encode(Body(kind: request.kind.rawValue, term: request.term, context_en: request.contextEnglish, context_ja: request.contextJapanese,
+                                                        detail: more ? "more" : "basic", sense: String(sense.unicodeScalars.prefix(60)).replacingOccurrences(of: "\u{0}", with: ""))) else {
+            return .failure(.rejected("リクエストを作成できませんでした"))
+        }
+        var headers = ["Content-Type": "application/json", "Accept": "application/json"]
+        if let t = cfg.token, !t.isEmpty { headers["X-Mazemaze-Token"] = t }
+        let http = HTTPRequest(url: await baseURL(for: cfg).appendingPathComponent("api/define"), method: "POST",
+                               headers: headers, body: body, timeout: min(options.requestTimeout, 100))
+        var attempts = 0
+        while true {
+            let response: HTTPResponse
+            do {
+                response = try await transport.send(http)
+            } catch is PinMismatchError {
+                await resolver?.invalidate()
+                return .failure(.pinMismatch)
+            } catch is CancellationError {
+                return .failure(.cancelled)
+            } catch let e as URLError {
+                if e.code == .cancelled { return .failure(.cancelled) }
+                if ConnectionChecker.isCertificateError(e) { return .failure(.certificateUntrusted) }
+                lastErrorDetail = "通信エラー \(e.code.rawValue)"
+                await resolver?.invalidate()
+                return .failure(e.code == .timedOut ? .timeout : .unreachable)
+            } catch {
+                return .failure(.unreachable)
+            }
+            switch response.status {
+            case 200:
+                let outcome: DefinitionOutcome
+                if more {
+                    guard let m = DefinitionMore.decode(serverResponse: response.body) else { return .failure(.invalidResponse) }
+                    outcome = .more(m)
+                } else {
+                    guard let card = DefinitionCard.decode(serverResponse: response.body) else { return .failure(.invalidResponse) }
+                    outcome = .success(card)
+                }
+                lastServerSuccess = clock.now()
+                defineCache[key] = outcome
+                defineOrder.removeAll { $0 == key }; defineOrder.append(key)
+                if defineOrder.count > 200, let oldest = defineOrder.first { defineOrder.removeFirst(); defineCache[oldest] = nil }
+                return outcome
+            case 401:
+                return .failure(.unauthorized)
+            case 429:
+                attempts += 1
+                if attempts > (background ? 3 : 12) { return .failure(.busy) }       // a person waits about a minute; the background gives up sooner
+                let wait = min(max(Double(response.headers["retry-after"] ?? "") ?? 3, 1), 6)
+                var waited = 0.0
+                while waited < wait {
+                    let step = min(0.5, wait - waited)
+                    do { try await clock.sleep(seconds: step) } catch { return .failure(.cancelled) }
+                    waited += step
+                }
+                continue
+            case 404:
+                // The Mac is still running a server started before word lookup existed.
+                return .failure(.server("Mac のサーバーが古いようです。Mac のターミナルで run_lan.sh を止めて（Ctrl+C）、もう一度起動してください"))
+            case 400, 403, 411, 413, 415, 422:
+                return .failure(.rejected(Self.serverMessage(response.body) ?? "サーバーが要求を受け付けませんでした"))
+            default:
+                lastErrorDetail = "HTTP \(response.status)"
+                return .failure(.server(Self.serverMessage(response.body) ?? "意味を調べられませんでした"))
+            }
+        }
+    }
+
     // MARK: translate
     public func translate(scope: Int = 0, gen: Int, text: String) async -> TranslationOutcome {
+        lastTranslateActivity = clock.now()
+        defer { lastTranslateActivity = clock.now() }
         guard gen == generation(of: scope) else { return .failure(.stale) }
         guard BridgeMessage.validText(text) else { return .failure(.rejected("翻訳できないテキストです")) }
         guard let cfg = config() else { return .failure(.notConfigured) }

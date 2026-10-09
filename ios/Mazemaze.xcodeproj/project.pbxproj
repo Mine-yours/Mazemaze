@@ -15,6 +15,7 @@
 		50EFE5093E96DBC7BC3A811C /* MazemazeCore in Frameworks */ = {isa = PBXBuildFile; productRef = F24C5F60E3D7EFF68E987C74 /* MazemazeCore */; };
 		57D7FF05007A9F022689751C /* PasteTranslateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */; };
 		598ECA083E8EED53CC291A81 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14BC652CBAB00934BF0C021B /* BrowserView.swift */; };
+		6757FE4DFFE2389DED0A2986 /* InlineDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 855665B9C3A69C5182F54080 /* InlineDictionaryView.swift */; };
 		6FED3F022C889CE8FF7FC638 /* Resources/translator.js in Resources */ = {isa = PBXBuildFile; fileRef = 24E300CCF8249C399A82921D /* Resources/translator.js */; };
 		73B9F094621BE07E61A3CF8C /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D155372C8AE34D1B4DAA9C /* HomeView.swift */; };
 		77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */; };
@@ -25,12 +26,14 @@
 		B9F97151124E95139F86D795 /* TabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821BAE9A18D5674DAA960694 /* TabModel.swift */; };
 		CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F529774BF11EA85B1A85540F /* SelfTest.swift */; };
 		DA3E1845DA737557CD2A170C /* DictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED12BD1755214971420FCA8 /* DictionaryView.swift */; };
+		E7C9703C008A517CDA5B694B /* LookupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBA3F242F83B5AE4033C23C /* LookupSheet.swift */; };
 		F599865DB12219E28A1168BB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		14BC652CBAB00934BF0C021B /* BrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserView.swift; sourceTree = "<group>"; };
 		16FCF97F97731EF8AD6CE27F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		1BBA3F242F83B5AE4033C23C /* LookupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookupSheet.swift; sourceTree = "<group>"; };
 		24E300CCF8249C399A82921D /* Resources/translator.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/translator.js; sourceTree = "<group>"; };
 		25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteTranslateView.swift; sourceTree = "<group>"; };
@@ -38,6 +41,7 @@
 		53E9C604AC6013CFC0F8EB6B /* Resources/paste.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = Resources/paste.html; sourceTree = "<group>"; };
 		696CE3428F7BB0D432046046 /* Resources/paste_fill.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/paste_fill.js; sourceTree = "<group>"; };
 		821BAE9A18D5674DAA960694 /* TabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabModel.swift; sourceTree = "<group>"; };
+		855665B9C3A69C5182F54080 /* InlineDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineDictionaryView.swift; sourceTree = "<group>"; };
 		88190A352D59D2E83E85BC42 /* Resources/paste_text.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/paste_text.js; sourceTree = "<group>"; };
 		8B251E714603D76D82E4DF6A /* TabSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSwitcherView.swift; sourceTree = "<group>"; };
 		8B4C98DC756CC98573D4A8D7 /* Bench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bench.swift; sourceTree = "<group>"; };
@@ -80,7 +84,9 @@
 				25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */,
 				4ED12BD1755214971420FCA8 /* DictionaryView.swift */,
 				C4D155372C8AE34D1B4DAA9C /* HomeView.swift */,
+				855665B9C3A69C5182F54080 /* InlineDictionaryView.swift */,
 				900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */,
+				1BBA3F242F83B5AE4033C23C /* LookupSheet.swift */,
 				A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */,
 				368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */,
 				F529774BF11EA85B1A85540F /* SelfTest.swift */,
@@ -191,7 +197,9 @@
 				9E0BF8DF6A2ACE7388B73DA7 /* ContentView.swift in Sources */,
 				DA3E1845DA737557CD2A170C /* DictionaryView.swift in Sources */,
 				73B9F094621BE07E61A3CF8C /* HomeView.swift in Sources */,
+				6757FE4DFFE2389DED0A2986 /* InlineDictionaryView.swift in Sources */,
 				AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */,
+				E7C9703C008A517CDA5B694B /* LookupSheet.swift in Sources */,
 				77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */,
 				57D7FF05007A9F022689751C /* PasteTranslateView.swift in Sources */,
 				CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */,

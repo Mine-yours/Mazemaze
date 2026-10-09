@@ -14,6 +14,7 @@ struct ContentView: View {
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
             .sheet(isPresented: $showTabs) { TabSwitcherView().environmentObject(model) }
             .sheet(isPresented: $showDictionary) { DictionaryView().environmentObject(model) }
+            .sheet(item: Binding(get: { model.showPaste ? nil : model.lookupSession }, set: { model.lookupSession = $0 })) { LookupSheet(session: $0).environmentObject(model) }
             .fullScreenCover(isPresented: $model.showPaste) { PasteTranslateView().environmentObject(model) }
             .onAppear {
                 #if DEBUG
@@ -21,10 +22,25 @@ struct ContentView: View {
                 switch SelfTest.value("-MazemazeShow") {
                 case "tabs"?: showTabs = true; return
                 case "settings"?: showSettings = true; return
+                case "lookup"?, "lookupphrase"?:             // screenshots only
+                    let phrase = SelfTest.value("-MazemazeShow") == "lookupphrase"
+                    if let r = LookupRequest.make(kind: phrase ? .phrase : .word, term: phrase ? "I have a pen" : "have", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています") {
+                        Task { @MainActor in try? await Task.sleep(nanoseconds: 800_000_000); model.openLookup(r, pageURL: URL(string: "https://x.com/a")) }
+                    }
+                    return
                 case "dictionary"?:
                     if SelfTest.value("-MazemazeDemoDictionary") == "1" {      // screenshots only
                         for (en, ja, src) in [("good weather", "良い天気", "news.yahoo.co.jp"), ("Prime Minister", "首相", "x.com"), ("take a stroll", "散歩に出かける", DictionaryData.pasteSource)] {
                             _ = model.saveToDictionary(english: en, japanese: ja, pageURL: src == DictionaryData.pasteSource ? PasteSurface.url : URL(string: "https://\(src)/a"))
+                        }
+                    }
+                    if SelfTest.value("-MazemazeDemoDictionary") == "1", let r1 = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have lunch at noon", contextJapanese: "正午に昼食を食べます"),
+                       let r2 = LookupRequest.make(kind: .word, term: "stroll", contextEnglish: "She took a stroll along the river", contextJapanese: "彼女は川沿いを散歩した") {
+                        let s1 = LookupSession(request: r1, source: "x.com", sourceURL: nil, existingEntry: nil)
+                        _ = model.saveWordWithContext(request: r1, session: s1)                                  // waiting for its meaning
+                        let json: [String: Any] = ["card": ["kind": "word", "lemma": "stroll", "pos": "名詞", "contextMeaning": "散歩", "contextIndex": 0, "meanings": [["meaning": "散歩"], ["meaning": "ぶらぶら歩く"]]]]
+                        if let data = try? JSONSerialization.data(withJSONObject: json), let card = DefinitionCard.decode(serverResponse: data) {
+                            _ = model.saveLookedUp(card: card, request: r2, session: LookupSession(request: r2, source: "news.yahoo.co.jp", sourceURL: nil, existingEntry: nil))
                         }
                     }
                     showDictionary = true; return
@@ -51,16 +67,16 @@ struct ContentView: View {
                     }
                 }
                 #endif
-                if model.needsSetup { showSettings = true } else { model.warmupIfNeeded() }
+                if model.needsSetup { showSettings = true } else { model.warmupIfNeeded(); model.startMeaningWorker() }
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded() }
+                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
             }
             .onChange(of: model.pasteNonce) { _ in
                 // A full-screen cover cannot appear above an open sheet: close them first.
-                let hadSheet = showSettings || showTabs || showDictionary
-                showSettings = false; showTabs = false; showDictionary = false
+                let hadSheet = showSettings || showTabs || showDictionary || model.lookupSession != nil
+                showSettings = false; showTabs = false; showDictionary = false; model.lookupSession = nil
                 Task { @MainActor in
                     if hadSheet { try? await Task.sleep(nanoseconds: 500_000_000) }
                     model.presentPaste()
@@ -68,7 +84,7 @@ struct ContentView: View {
             }
             .onChange(of: model.pairingNonce) { _ in
                 // An alert cannot appear above an open sheet: close them, let the animation finish, then ask.
-                showSettings = false; showTabs = false; showDictionary = false; if model.showPaste { model.closePaste() }
+                showSettings = false; showTabs = false; showDictionary = false; model.lookupSession = nil; if model.showPaste { model.closePaste() }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     model.pairingPromptVisible = true
@@ -93,6 +109,7 @@ func pairingSummary(_ p: PairingPayload?, downgrade: Bool = false) -> String {
     guard let p else { return "" }
     var lines = ["Mac: \(p.name ?? p.host ?? p.ip ?? "?")", "アドレス: \(p.primaryURL.absoluteString)"]
     if let f = p.fallbackURL { lines.append("予備のアドレス: \(f.absoluteString)") }
+    if let t = p.tailscaleURL { lines.append("外出先（Tailscale）: \(t.absoluteString)") }
     if p.isEncrypted {
         lines.append("通信: 暗号化あり。証明書の指紋 \(p.shortFingerprint ?? "") と同じ証明書を持つ Mac にだけ接続し、違う機器には接続しません（Mac の画面に出ている指紋の先頭と比べられます）。")
     } else {

@@ -2,26 +2,60 @@ import Foundation
 
 /// One saved expression: the English the page showed and the Japanese it replaced (the original).
 /// Only what the person chose to save, only on this iPhone.
+public enum EntryKind: String, Codable, Equatable, Sendable { case expression, word }
+
+/// A word saved from the dictionary tab has no meaning yet: the app looks it up in the background.
+public enum MeaningState: String, Codable, Equatable, Sendable { case none, pending, failed }
+
 public struct DictionaryEntry: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
+    /// `.expression`: a span of the page (English + the Japanese it replaced). `.word`: one word with its sense.
+    public var kind: EntryKind
     public var english: String
+    /// An expression: the Japanese it replaced. A word: its meaning in this sentence (empty while `meaning == .pending`).
     public var japanese: String
+    /// Where a word was read: the English phrase on the page and the Japanese it replaced (empty for expressions, which are these).
+    public var contextEnglish: String
+    public var contextJapanese: String
+    public var meaning: MeaningState
     /// "x.com", "news.yahoo.co.jp", or "貼り付け" for the paste screen.
     public var source: String
     /// The page it came from, only when it is a public page (SessionPrivacy decides; never a query or a login page).
     public var sourceURL: URL?
     public var note: String
     public var savedAt: Date
+    /// The meaning card the local model made (word senses / phrase explanation), if the person looked it up.
+    public var card: DefinitionCard?
 
-    public init(id: UUID = UUID(), english: String, japanese: String, source: String, sourceURL: URL?, note: String = "", savedAt: Date) {
-        self.id = id; self.english = english; self.japanese = japanese; self.source = source
-        self.sourceURL = sourceURL; self.note = note; self.savedAt = savedAt
+    public init(id: UUID = UUID(), kind: EntryKind = .expression, english: String, japanese: String, contextEnglish: String = "", contextJapanese: String = "",
+                meaning: MeaningState = .none, source: String, sourceURL: URL?, note: String = "", savedAt: Date, card: DefinitionCard? = nil) {
+        self.id = id; self.kind = kind; self.english = english; self.japanese = japanese
+        self.contextEnglish = contextEnglish; self.contextJapanese = contextJapanese; self.meaning = meaning
+        self.source = source; self.sourceURL = sourceURL; self.note = note; self.savedAt = savedAt; self.card = card
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, english, japanese, contextEnglish, contextJapanese, meaning, source, sourceURL, note, savedAt, card }
+
+    public init(from decoder: Decoder) throws {          // files saved before words and cards existed have no kind / card
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decodeIfPresent(EntryKind.self, forKey: .kind) ?? .expression
+        english = try c.decode(String.self, forKey: .english)
+        japanese = try c.decode(String.self, forKey: .japanese)
+        contextEnglish = try c.decodeIfPresent(String.self, forKey: .contextEnglish) ?? ""
+        contextJapanese = try c.decodeIfPresent(String.self, forKey: .contextJapanese) ?? ""
+        meaning = (try? c.decodeIfPresent(MeaningState.self, forKey: .meaning)) ?? .none
+        source = try c.decode(String.self, forKey: .source)
+        sourceURL = try c.decodeIfPresent(URL.self, forKey: .sourceURL)
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        card = try? c.decodeIfPresent(DefinitionCard.self, forKey: .card)       // an unreadable card never loses the entry
     }
 }
 
 /// The dictionary: newest first, no duplicates, bounded. A plain value (loading and saving live in DictionaryStorage).
 public struct DictionaryData: Codable, Equatable, Sendable {
-    public static let currentVersion = 1
+    public static let currentVersion = 2      // 2: entries may be words and may carry a meaning card (version-1 files still load)
     public static let maxEntries = 5000
     public static let maxTermScalars = 300
     public static let maxNoteScalars = 1000
@@ -72,20 +106,57 @@ public struct DictionaryData: Codable, Equatable, Sendable {
         english.precomposedStringWithCanonicalMapping.lowercased() + "\u{0}" + japanese.precomposedStringWithCanonicalMapping
     }
 
+    /// What makes two entries "the same": an expression is its English and Japanese; a word is the word in the sentence it was read in.
+    static func key(of e: DictionaryEntry) -> String { e.kind == .word && !e.contextJapanese.isEmpty ? key(e.english, e.contextJapanese) : key(e.english, e.japanese) }
+
     @discardableResult
-    public mutating func add(english: String, japanese: String, source: String, sourceURL: URL?, now: Date = Date()) -> AddResult {
+    public mutating func add(english: String, japanese: String, source: String, sourceURL: URL?, now: Date = Date(),
+                             kind: EntryKind = .expression, card: DefinitionCard? = nil,
+                             contextEnglish: String = "", contextJapanese: String = "", meaning: MeaningState = .none) -> AddResult {
         let en = Self.clean(english), ja = Self.clean(japanese)
-        guard !en.isEmpty, !ja.isEmpty else { return .rejected(.empty) }
-        guard en.unicodeScalars.count <= Self.maxTermScalars, ja.unicodeScalars.count <= Self.maxTermScalars else { return .rejected(.tooLong) }
-        let k = Self.key(en, ja)
-        if let existing = entries.first(where: { Self.key($0.english, $0.japanese) == k }) { return .duplicate(existing) }
-        guard entries.count < Self.maxEntries else { return .rejected(.full) }
+        let ctxEn = Self.clean(contextEnglish), ctxJa = Self.clean(contextJapanese)
+        guard !en.isEmpty, !ja.isEmpty || meaning == .pending else { return .rejected(.empty) }       // a pending word has no meaning yet
+        guard [en, ja, ctxEn, ctxJa].allSatisfy({ $0.unicodeScalars.count <= Self.maxTermScalars }) else { return .rejected(.tooLong) }
         let src = Self.clean(source)
-        let entry = DictionaryEntry(english: en, japanese: ja, source: String(src.prefix(80)),
-                                    sourceURL: SessionPrivacy.persistableURL(sourceURL), savedAt: now)
+        let entry = DictionaryEntry(kind: kind, english: en, japanese: ja, contextEnglish: ctxEn, contextJapanese: ctxJa, meaning: meaning,
+                                    source: String(src.prefix(80)), sourceURL: SessionPrivacy.persistableURL(sourceURL), savedAt: now, card: card)
+        let k = Self.key(of: entry)
+        if let existing = entries.first(where: { Self.key(of: $0) == k }) { return .duplicate(existing) }
+        guard entries.count < Self.maxEntries else { return .rejected(.full) }
         entries.insert(entry, at: 0)
         return .added(entry)
     }
+
+    /// A word looked up on the card: saved as its own entry (English = base form, Japanese = the sense in context), with the
+    /// English phrase and the Japanese original it was read in.
+    @discardableResult
+    public mutating func addWord(_ card: WordCard, contextEnglish: String = "", contextJapanese: String = "", source: String, sourceURL: URL?, now: Date = Date()) -> AddResult {
+        add(english: card.lemma, japanese: card.contextMeaning, source: source, sourceURL: sourceURL, now: now, kind: .word, card: .word(card),
+            contextEnglish: contextEnglish, contextJapanese: contextJapanese)
+    }
+
+    /// A word saved straight from the iPhone's dictionary: its meaning is looked up in the background afterwards.
+    @discardableResult
+    public mutating func addPendingWord(_ term: String, contextEnglish: String, contextJapanese: String, source: String, sourceURL: URL?, now: Date = Date()) -> AddResult {
+        add(english: term, japanese: "", source: source, sourceURL: sourceURL, now: now, kind: .word, card: nil,
+            contextEnglish: contextEnglish, contextJapanese: contextJapanese, meaning: .pending)
+    }
+
+    /// Attach (or replace) the meaning card of an entry that already exists. A word takes the sense in context as its meaning.
+    public mutating func setCard(id: UUID, card: DefinitionCard) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].card = card
+        if entries[i].kind == .word, case .word(let c) = card { entries[i].japanese = c.contextMeaning }
+        entries[i].meaning = .none
+    }
+
+    public mutating func setMeaningState(id: UUID, _ state: MeaningState) {
+        guard let i = entries.firstIndex(where: { $0.id == id }), entries[i].card == nil else { return }
+        entries[i].meaning = state
+    }
+
+    /// Words waiting for their meaning, oldest first (the order they were saved in).
+    public var pendingWords: [DictionaryEntry] { entries.filter { $0.kind == .word && $0.meaning == .pending && $0.card == nil }.reversed() }
 
     public mutating func remove(id: UUID) { entries.removeAll { $0.id == id } }
     public mutating func remove(ids: Set<UUID>) { entries.removeAll { ids.contains($0.id) } }
@@ -102,7 +173,7 @@ public struct DictionaryData: Codable, Equatable, Sendable {
         let words = query.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard !words.isEmpty else { return entries }
         return entries.filter { e in
-            let hay = [e.english, e.japanese, e.note, e.source].joined(separator: "\n").lowercased()
+            let hay = [e.english, e.japanese, e.contextEnglish, e.contextJapanese, e.note, e.source, e.card?.searchText ?? ""].joined(separator: "\n").lowercased()
             return words.allSatisfy { hay.contains($0) }
         }
     }
@@ -122,15 +193,16 @@ public struct DictionaryData: Codable, Equatable, Sendable {
             return v
         }
         let iso = ISO8601DateFormatter()
-        var rows = ["english,japanese,source,url,note,saved_at"]
+        var rows = ["english,japanese,type,details,context_en,context_ja,source,url,note,saved_at"]
         for e in entries {
-            rows.append([cell(e.english), cell(e.japanese), cell(e.source), cell(e.sourceURL?.absoluteString ?? ""), cell(e.note), iso.string(from: e.savedAt)].joined(separator: ","))
+            rows.append([cell(e.english), cell(e.japanese), e.kind.rawValue, cell(e.card?.details ?? ""), cell(e.contextEnglish), cell(e.contextJapanese),
+                         cell(e.source), cell(e.sourceURL?.absoluteString ?? ""), cell(e.note), iso.string(from: e.savedAt)].joined(separator: ","))
         }
         return rows.joined(separator: "\r\n") + "\r\n"
     }
 
     /// One line per entry: "english — japanese".
-    public func plainText() -> String { entries.map { "\($0.english) — \($0.japanese)" }.joined(separator: "\n") }
+    public func plainText() -> String { entries.map { "\($0.english) — \($0.japanese.isEmpty ? $0.contextJapanese : $0.japanese)" }.joined(separator: "\n") }
 }
 
 /// Loads and saves the dictionary as one JSON file (atomic writes). A file that cannot be read is never replaced:
@@ -160,7 +232,10 @@ public final class DictionaryStorage: @unchecked Sendable {
             return DictionaryData()
         }
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        if let d = try? decoder.decode(DictionaryData.self, from: data), d.version <= DictionaryData.currentVersion { return d }
+        if var d = try? decoder.decode(DictionaryData.self, from: data), d.version <= DictionaryData.currentVersion {
+            d.version = DictionaryData.currentVersion          // a version-1 file is written back as version 2
+            return d
+        }
         let aside = fileURL.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date().timeIntervalSince1970)).json")
         do {
             try fm.moveItem(at: fileURL, to: aside)

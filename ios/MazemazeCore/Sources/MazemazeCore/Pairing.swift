@@ -17,7 +17,7 @@ public enum PairingError: Error, Equatable {
 }
 
 /// What the Mac shows (as a QR code and as text) so the iPhone can be set up without typing:
-///   mazemaze://pair?v=1&h=<mac>.local&i=<192.168.x.x>&p=8000&t=<token>&s=https&f=<sha256 of the certificate>
+///   mazemaze://pair?v=1&h=<mac>.local&i=<192.168.x.x>&p=8000&t=<token>&s=https&f=<sha256 of the certificate>&ts=<mac>.<tailnet>.ts.net
 /// The QR code travels from the Mac's screen to the iPhone's camera, not over the network, so the token
 /// is never exposed on the Wi-Fi while pairing. Nothing here is applied without the person confirming it.
 public struct PairingPayload: Equatable, Sendable {
@@ -29,8 +29,9 @@ public struct PairingPayload: Equatable, Sendable {
     public let token: String
     public let fingerprint: String?      // SHA-256 of the server certificate (lowercase hex), https only
     public let name: String?
+    public let tailscale: String?        // the Mac's Tailscale name (<mac>.<tailnet>.ts.net), https only
 
-    static let allowedKeys: Set<String> = ["v", "h", "i", "p", "t", "s", "f", "n"]
+    static let allowedKeys: Set<String> = ["v", "h", "i", "p", "t", "s", "f", "n", "ts"]
 
     public static func parse(_ raw: String) -> Result<PairingPayload, PairingError> {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,6 +83,15 @@ public struct PairingPayload: Equatable, Sendable {
             return .failure(.missing("f"))        // encrypted but unauthenticated would be pointless
         }
 
+        var tailscale: String?
+        if let ts = values["ts"] {
+            // Away from home the traffic crosses networks the owner does not control, so it is only accepted
+            // encrypted and pinned to the paired certificate.
+            let lower = ts.lowercased()
+            guard scheme == .https, LocalHostPolicy.isTailscaleHost(lower) else { return .failure(.invalid("ts")) }
+            tailscale = lower
+        }
+
         var name: String?
         if let n = values["n"] {
             // URLComponents has already decoded the value. Drop control, zero-width and bidi-control characters
@@ -89,13 +99,16 @@ public struct PairingPayload: Equatable, Sendable {
             let hidden: (Unicode.Scalar) -> Bool = { $0.value < 0x20 || $0.value == 0x7F || (0x200B...0x200F).contains($0.value) || (0x202A...0x202E).contains($0.value) || (0x2066...0x2069).contains($0.value) || $0.value == 0xFEFF }
             name = String(String(String.UnicodeScalarView(n.unicodeScalars.filter { !hidden($0) })).prefix(40))
         }
-        return .success(PairingPayload(scheme: scheme, host: host, ip: ip, port: port, token: t, fingerprint: fingerprint, name: name))
+        return .success(PairingPayload(scheme: scheme, host: host, ip: ip, port: port, token: t, fingerprint: fingerprint, name: name, tailscale: tailscale))
     }
 
     /// The address to try first: the `.local` name (it keeps working when the Mac's IP address changes).
     public var primaryURL: URL { url(host ?? ip ?? "") }
     /// The IP address, tried when the `.local` name cannot be found.
     public var fallbackURL: URL? { (host != nil && ip != nil) ? url(ip!) : nil }
+
+    /// The Tailscale address, tried last (away from home).
+    public var tailscaleURL: URL? { tailscale.map { url($0) } }
 
     private func url(_ h: String) -> URL {
         var c = URLComponents()

@@ -30,8 +30,11 @@ final class WebHostController: UIViewController {
         super.viewDidLoad()
         webView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(webView)
+        // The page starts below the status bar. Pages that ask for `viewport-fit=cover` (X does) are laid out under the
+        // notch / status bar and expect the browser to keep its own chrome there: a header fixed at the top of such a
+        // page would otherwise sit behind the status bar.
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.topAnchor), webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor), webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
         additionalSafeAreaInsets = covered
@@ -213,6 +216,10 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         case .success(.save(let en, let ja)):
             guard app.decision(for: pageURL).isAllowed else { return (["ok": false, "error": "not_allowed", "message": "このページでは保存できません"], nil) }
             return (app.saveToDictionary(english: en, japanese: ja, pageURL: pageURL), nil)
+        case .success(.lookup(let request)):
+            guard app.decision(for: pageURL).isAllowed else { return (["ok": false, "error": "not_allowed", "message": "このページでは調べられません"], nil) }
+            app.openLookup(request, pageURL: pageURL)
+            return (["ok": true], nil)
         case .success(.translate(let gen, let text)):
             // Re-check on every request: a single-page app may have moved to a denied page.
             guard app.decision(for: pageURL).isAllowed, app.translationEnabled, !tab.suspendedForPage else {

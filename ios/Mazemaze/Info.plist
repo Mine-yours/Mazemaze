@@ -14,11 +14,25 @@
 		</dict>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>同じ Wi-Fi 上の Mac で動く Mazemaze の翻訳サーバーに接続するために使います。</string>
+	<string>同じ Wi-Fi 上（または Tailscale 経由）の Mac で動く Mazemaze の翻訳サーバーに接続するために使います。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- Away from home the Mac is reached by its Tailscale name (<mac>.<tailnet>.ts.net) over a self-signed,
+		     certificate-pinned https connection (the app compares the certificate fingerprint itself). ATS would
+		     refuse that certificate for a non-local host, so only *.ts.net is exempted (not NSAllowsArbitraryLoads).
+		     The app never sends the token to any other address and refuses plain http for Tailscale. -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>ts.net</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 </dict>
 </plist>

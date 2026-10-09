@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import WebKit
+import AVFoundation
 import MazemazeCore
 
 /// Debug-only simulator self-test, driven by launch arguments (see ios/scripts/simulator_selftest.sh).
@@ -235,6 +236,14 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             if let w = first.webView { web = w }       // the first tab may have slept and woken with a new web view
 
+            // ---- a page that asks for viewport-fit=cover (X does) must start below the status bar
+            await load("/cover.html")
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let onScreen = web.convert(web.bounds, to: nil)
+            let safeTop = web.window?.safeAreaInsets.top ?? 0
+            let headerTop = (await inPage("return Math.round(document.getElementById('hdr').getBoundingClientRect().top)") as? Int) ?? -1
+            report("viewport-fit=cover: the page starts below the status bar, so a header fixed at its top stays visible", onScreen.minY >= safeTop - 0.5 && headerTop == 0, "webTop=\(onScreen.minY) safeTop=\(safeTop) headerTop=\(headerTop)")
+
             // ---- bars that slide away while reading
             await load("/scroll.html")
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -281,6 +290,67 @@ enum SelfTest {
             report("dictionary: what was saved is on disk", reloaded.entries.count == dictBefore + 1 && reloaded.entries.first?.english == "good weather")
             if let id = app.dictionary.entries.first?.id { app.removeFromDictionary(ids: [id]) }
             report("dictionary: deleting removes it (and from disk)", app.dictionary.entries.count == dictBefore && DictionaryStorage(fileURL: app.dictionaryStorage.fileURL).load().entries.count == dictBefore)
+
+            // ---- meaning cards: "意味を調べる" from the popover goes through the bridge; the card comes from the Mac
+            let lookupReply = await bridge(#"{type:"lookup", kind:"word", term:"have", en:"I have a pen", ja:"ペンを持っています"}"#) as? [String: Any]
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            report("lookup: the bridge opens the meaning sheet for the word", (lookupReply?["ok"] as? Bool) == true && app.lookupSession?.request.term == "have" && app.lookupSession?.request.kind == .word && app.lookupSession?.request.contextJapanese == "ペンを持っています", "\(lookupReply ?? [:])")
+            let badLookup = await bridge(#"{type:"lookup", kind:"word", term:"have a", en:"x", ja:"y"}"#)
+            report("lookup: a request that is not a single word is refused", badLookup == nil)
+            let extraLookup = await bridge(#"{type:"lookup", kind:"word", term:"have", en:"x", ja:"y", url:"https://evil.example/"}"#)
+            report("lookup: a request with extra fields is refused", extraLookup == nil)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)           // the sheet asks the Mac (fake model) for the card
+            if let r = app.lookupSession?.request {
+                let outcome = await app.service.define(r)
+                if case .success(.word(let c)) = outcome {
+                    report("lookup: the Mac's card is validated and usable (senses, sense in context)", c.lemma == "have" && c.meanings.count == 3 && c.contextMeaning == "持つ・所有する" && c.matchInSource == "持っています", "\(c.lemma) \(c.meanings.count)")
+                    if case .more(let more) = await app.service.define(r, more: true, sense: c.contextMeaning), case .success(.word(let merged)) = .success(DefinitionCard.word(c).merging(more)) as DefinitionOutcome {
+                        report("lookup: the second step adds an example and expressions", merged.meanings[merged.contextIndex].exampleEn == "I have a pen." && merged.phrases == ["have to", "have been"])
+                    } else { report("lookup: the second step adds an example and expressions", false) }
+                    let before = app.dictionary.entries.count
+                    let s1 = app.saveLookedUp(card: .word(c), request: r, session: app.lookupSession!)
+                    let s2 = app.saveLookedUp(card: .word(c), request: r, session: app.lookupSession!)
+                    report("lookup: saving a word adds it once, as a word with its senses", s1 == .saved && s2 == .duplicate && app.dictionary.entries.count == before + 1 && app.dictionary.entries.first?.kind == .word && app.dictionary.entries.first?.card != nil)
+                    if let id = app.dictionary.entries.first?.id { app.removeFromDictionary(ids: [id]) }
+                } else {
+                    report("lookup: the Mac's card is validated and usable", false, "\(outcome)")
+                }
+                let phraseReq = LookupRequest.make(kind: .phrase, term: "I have a pen", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています")!
+                let phraseOutcome = await app.service.define(phraseReq)
+                if case .success(.phrase(let p)) = phraseOutcome {
+                    var ok = p.meaning == "私はペンを持っています"
+                    if case .more(.phrase(let points, let syn, let ex)) = await app.service.define(phraseReq, more: true) { ok = ok && points.count == 1 && syn.count == 1 && ex != nil } else { ok = false }
+                    report("lookup: a phrase card has the meaning, then points, synonyms and an example", ok)
+                } else { report("lookup: a phrase card has the meaning", false, "\(phraseOutcome)") }
+            } else { report("lookup: the sheet stays open until closed", false) }
+            if let session = app.lookupSession {
+                let wordReq = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have lunch at noon", contextJapanese: "正午に昼食を食べます")!
+                let before = app.dictionary.entries.count
+                let w1 = app.saveWordWithContext(request: wordReq, session: session)
+                let w2 = app.saveWordWithContext(request: wordReq, session: session)
+                var e = app.dictionary.entries.first
+                report("lookup: a word from the iPhone's dictionary is saved with its English phrase and Japanese original, waiting for its meaning, once",
+                       w1 == .saved && w2 == .duplicate && app.dictionary.entries.count == before + 1 && e?.kind == .word && e?.english == "have"
+                       && e?.contextEnglish == "I have lunch at noon" && e?.contextJapanese == "正午に昼食を食べます" && (e?.meaning == .pending || e?.card != nil), "\(String(describing: e))")
+                // The background worker asks the Mac (the fake model) by itself and fills the meaning in.
+                for _ in 0..<60 { e = app.dictionary.entries.first { $0.english == "have" && $0.contextJapanese == "正午に昼食を食べます" }; if e?.card != nil { break }; try? await Task.sleep(nanoseconds: 500_000_000) }
+                report("lookup: the meaning of a saved word arrives by itself in the background (the sense in context, no pending left)",
+                       e?.card != nil && e?.meaning == MeaningState.none && e?.japanese == "持つ・所有する" && e?.english == "have" && e?.contextEnglish == "I have lunch at noon" && app.dictionary.pendingWords.isEmpty,
+                       "\(String(describing: e?.meaning)) \(e?.japanese ?? "-")")
+                if let id = e?.id { app.removeFromDictionary(ids: [id]) }
+                report("lookup: a word starts with the iPhone's dictionary, a phrase with the model's answer",
+                       session.mode == .dictionary && LookupSession(request: LookupRequest.make(kind: .phrase, term: "I have a pen", contextEnglish: "", contextJapanese: "")!, source: "x.com", sourceURL: nil, existingEntry: nil).mode == .ai)
+            }
+            app.lookupSession = nil
+            try? await Task.sleep(nanoseconds: 800_000_000)
+
+            // ---- reading aloud: the speech must really start (and say why when it cannot)
+            let voices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }.count
+            let startedBefore = Speaker.shared.startedCount
+            Speaker.shared.speak("have")
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            print("SELFTEST INFO speech: englishVoices=\(voices) state=\(Speaker.shared.state) started=\(Speaker.shared.startedCount - startedBefore)")
+            report("speech: reading a word aloud starts (or says why not)", Speaker.shared.startedCount > startedBefore || { if case .failed = Speaker.shared.state { return true }; return false }(), "voices=\(voices) state=\(Speaker.shared.state)")
 
             // ---- "貼り付けて翻訳": the app's own page, same pipeline, not a tab, not reachable from anywhere else
             let pasteLines = ["今日は晴れていて、散歩に出かけるのにちょうど良い天気です。", "", "短い", "<img src=x onerror=window.__xss=1>テストの文章がここにあります。これは日本語の文章です。", "もう一行、日本語のしっかりした長さの文章がここに入ります。それから続きます。"]

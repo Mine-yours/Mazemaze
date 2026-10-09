@@ -4,6 +4,9 @@
 # 使い方: ./scripts/run_lan.sh          （アクセストークン付き + 暗号化（自己署名 TLS）で起動し、iPhone 用の QR を表示）
 #         MAZEMAZE_TLS=0 ./scripts/run_lan.sh        （暗号化なしの HTTP。古い設定との互換用。非推奨）
 #         MAZEMAZE_NO_TOKEN=1 ./scripts/run_lan.sh   （トークンなし。非推奨。QR ペアリングは使えません）
+#         MAZEMAZE_TAILSCALE=0 ./scripts/run_lan.sh  （Tailscale を使わない。既定では、Tailscale が動いていれば外出先用のアドレスも QR に入れる）
+# 外出先で使う場合: Mac と iPhone の両方で Tailscale をオンにし、Mac で一度だけ（表示される）tailscale serve のコマンドを実行します。
+#   Funnel（インターネット公開）は使いません。このスクリプトは Tailscale の設定を変更しません（確認と案内だけ）。
 # トークンは .mazemaze_token、証明書は .mazemaze_tls/ に保存され（どちらも Git 管理外）、毎回同じです。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -62,6 +65,56 @@ if [ "${MAZEMAZE_TLS:-1}" != "0" ]; then
   TLS_ARGS=(--ssl-keyfile .mazemaze_tls/key.pem --ssl-certfile .mazemaze_tls/cert.pem)
 fi
 
+# --- Tailscale（外出先から使うための、tailnet 内だけの経路）-----------------------------------
+# サーバーは今までどおり LAN で待ち受けます。tailnet からの接続は、`tailscale serve --tcp` が Mac 自身（localhost）へ
+# 転送して届きます。転送を設定しない限り、tailnet の端末が直接つないでも 403 で拒否されます。
+# 暗号化（TLS + 証明書の指紋）とトークンが有効なときだけ使います。
+TS_IP=""; TS_NAME=""; TS_NOTE=""
+if [ "${MAZEMAZE_TAILSCALE:-1}" != "0" ] && [ "$SCHEME" = "https" ] && [ -n "$SUFFIX" ]; then
+  TS_CLI="$(command -v tailscale 2>/dev/null || true)"
+  [ -z "$TS_CLI" ] && [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] && TS_CLI=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  if [ -n "$TS_CLI" ]; then
+    TS_INFO="$("$TS_CLI" status --json 2>/dev/null | python3 -c '
+import json, re, sys
+try:
+    d = json.load(sys.stdin)
+    me = d["Self"]
+    name = me["DNSName"].rstrip(".").lower()
+    ip = next(i for i in me["TailscaleIPs"] if "." in i)
+    ok = (d.get("BackendState") == "Running"
+          and re.fullmatch(r"100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}", ip)
+          and re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+\.ts\.net", name))
+    print((name + " " + ip) if ok else "")
+except Exception:
+    print("")
+' 2>/dev/null || true)"
+    if [ -n "$TS_INFO" ]; then
+      TS_NAME="${TS_INFO% *}"; TS_IP="${TS_INFO#* }"
+      MAZEMAZE_ALLOWED_HOSTS="${MAZEMAZE_ALLOWED_HOSTS:+${MAZEMAZE_ALLOWED_HOSTS},}${TS_NAME}"
+      export MAZEMAZE_ALLOWED_HOSTS
+      TS_SERVE="$("$TS_CLI" serve status --json 2>/dev/null | PORT="$PORT" python3 -c '
+import json, os, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+port = os.environ["PORT"]
+fwd = (d.get("TCP") or {}).get(port) or {}
+funnel = any(bool(v) for v in (d.get("AllowFunnel") or {}).values())
+state = "ok" if fwd.get("TCPForward") in ("127.0.0.1:" + port, "localhost:" + port) else "missing"
+print(state + (" funnel" if funnel else ""))
+' 2>/dev/null || echo "missing")"
+      case "$TS_SERVE" in
+        ok*) TS_NOTE="ok" ;;
+        *) TS_NOTE="missing" ;;
+      esac
+      case "$TS_SERVE" in *funnel*) TS_NOTE="${TS_NOTE} funnel" ;; esac
+    else
+      TS_NOTE="off"
+    fi
+  fi
+fi
+
 PAIR=""
 if [ -n "$SUFFIX" ]; then
   NAME="$(scutil --get ComputerName 2>/dev/null || true)"
@@ -70,6 +123,7 @@ if [ -n "$SUFFIX" ]; then
   [ -n "$HOSTNAME_LOCAL" ] && PAIR="${PAIR}&h=${HOSTNAME_LOCAL}.local"
   PAIR="${PAIR}&i=${IP}&p=${PORT}&t=${MAZEMAZE_TOKEN}"
   if [ "$SCHEME" = "https" ]; then PAIR="${PAIR}&s=https&f=${FINGERPRINT}"; fi
+  [ -n "$TS_NAME" ] && PAIR="${PAIR}&ts=${TS_NAME}"
   [ -n "$NAME_Q" ] && PAIR="${PAIR}&n=${NAME_Q}"
 fi
 
@@ -87,6 +141,20 @@ fi
 echo " 手入力する場合:  サーバーの URL: ${SCHEME}://${IP}:${PORT}"
 if [ -n "$HOSTNAME_LOCAL" ]; then echo "     （IP が変わる場合は ${SCHEME}://${HOSTNAME_LOCAL}.local:${PORT} でも可）"; fi
 if [ -n "$SUFFIX" ]; then echo "                      トークン: ${MAZEMAZE_TOKEN}"; fi
+case "$TS_NOTE" in
+  "") ;;
+  off) echo " Tailscale: 起動していない（または未ログイン）ため、外出先用のアドレスは QR に入れていません。" ;;
+  *)
+    echo " Tailscale（外出先用）: ${TS_NAME} / ${TS_IP} を QR に入れました（iPhone は名前で接続します。Tailscale の MagicDNS が有効であること）。iPhone と Mac の両方で Tailscale をオンにしてください。"
+    case "$TS_NOTE" in
+      ok*) echo "   tailnet からの転送: 設定済み（tailscale serve --tcp=${PORT}）" ;;
+      *)   echo "   tailnet からの転送が未設定です。Mac で一度だけ次を実行してください（tailnet の中だけに届きます。Funnel は使いません）:"
+           echo "     ${TS_CLI} serve --bg --tcp=${PORT} tcp://localhost:${PORT}"
+           echo "   やめるとき: ${TS_CLI} serve --tcp=${PORT} off" ;;
+    esac
+    case "$TS_NOTE" in *funnel*) echo "   警告: この Mac で Tailscale Funnel（インターネット公開）が有効です。Mazemaze のポートが含まれていないか、tailscale serve status で必ず確認してください。" ;; esac
+    ;;
+esac
 if [ "$SCHEME" = "https" ]; then
   echo " 通信は暗号化されます（証明書の指紋 ${FINGERPRINT:0:16}… を iPhone が確認します）。"
   echo " ※ iPhone の Safari や Mac のブラウザで開くと、証明書の警告が出ます（自己署名のため）。アプリを使ってください。"

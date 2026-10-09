@@ -10,8 +10,9 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from backend import define as definer
 from backend.config import MAX_INPUT_CHARS, Settings
 from backend.selector import DEFAULT_RATIO, MAX_RATIO, MIN_RATIO
 from backend.service import ServiceError, TranslationService
@@ -41,6 +42,31 @@ class TranslateRequest(BaseModel):
         return v
 
 
+class DefineRequest(BaseModel):
+    kind: Literal["word", "phrase"]
+    term: str = Field(min_length=1, max_length=definer.MAX_PHRASE_CHARS)
+    context_en: str = Field(default="", max_length=definer.MAX_CONTEXT_CHARS)
+    context_ja: str = Field(default="", max_length=definer.MAX_CONTEXT_CHARS)
+    detail: Literal["basic", "more"] = "basic"
+    sense: str = Field(default="", max_length=definer.MAX_SENSE_CHARS)       # the sense in context (for "more" on a word)
+
+    @model_validator(mode="after")
+    def _check(self):
+        for v in (self.term, self.context_en, self.context_ja, self.sense):
+            if "\x00" in v:
+                raise ValueError("nul")
+            try:
+                v.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("surrogate") from None
+        if not self.term.strip():
+            raise ValueError("blank")
+        if self.kind == "word" and (len(self.term) > definer.MAX_WORD_CHARS or any(c.isspace() for c in self.term)
+                                    or not any(c.isalpha() for c in self.term)):
+            raise ValueError("word")
+        return self
+
+
 def _error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse({"error": {"code": code, "message": message}}, status_code=status,
                         headers={"Cache-Control": "no-store"})
@@ -53,6 +79,12 @@ def _host_name(host_header: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
+# Tailscale's own address ranges. A tailnet peer must come through `tailscale serve` (which reaches us from
+# loopback); connecting to the server directly is refused. 100.64.0.0/10 is already "not private" in Python,
+# but Tailscale's IPv6 range is a unique-local (fc00::/7) address and would otherwise count as private.
+_TAILSCALE_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+
+
 def _is_private_ip(value: str, *, loopback_only: bool) -> bool:
     try:
         ip = ipaddress.ip_address(value)
@@ -62,6 +94,8 @@ def _is_private_ip(value: str, *, loopback_only: bool) -> bool:
         ip = ip.ipv4_mapped  # judge by the embedded IPv4 address, independent of the Python version
     if ip.is_loopback:
         return True
+    if any(ip.version == net.version and ip in net for net in _TAILSCALE_NETS):
+        return False
     return not loopback_only and (ip.is_private or ip.is_link_local) and not ip.is_unspecified
 
 
@@ -136,7 +170,9 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
     async def _invalid(request: Request, exc: RequestValidationError):
         # Default handler echoes the submitted body; never do that with the user's text.
         fields = sorted({str(e["loc"][-1]) for e in exc.errors() if e.get("loc")})
-        if "text" in fields:
+        if request.url.path == "/api/define":
+            message = "調べる語句が正しくありません（単語は 40 文字以内で空白を含めず、句は 300 文字以内です）。"
+        elif "text" in fields:
             message = f"文章は空でなく、{MAX_INPUT_CHARS} 文字以内で入力してください。"
         else:
             message = "入力値が正しくありません（英語化率は 10〜70%）。"
@@ -155,6 +191,23 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
             return _error(exc.status, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             log.error("unexpected error: %s", type(exc).__name__)
+            return _error(500, "internal_error", ServiceError("internal_error").message)
+        finally:
+            service.release()
+
+    @app.post("/api/define")
+    def define(req: DefineRequest):
+        """A word / phrase card for the learner's dictionary (same lock, auth and checks as translation)."""
+        if not service.try_acquire():
+            resp = _error(429, "busy", ServiceError("busy").message)
+            resp.headers["Retry-After"] = "2"
+            return resp
+        try:
+            return JSONResponse(service.define(req.kind, req.term, req.context_en, req.context_ja, req.detail, req.sense))
+        except ServiceError as exc:
+            return _error(exc.status, exc.code, exc.message)
+        except Exception as exc:  # noqa: BLE001
+            log.error("unexpected define error: %s", type(exc).__name__)
             return _error(500, "internal_error", ServiceError("internal_error").message)
         finally:
             service.release()

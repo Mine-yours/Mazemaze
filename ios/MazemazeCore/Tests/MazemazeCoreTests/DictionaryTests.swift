@@ -65,8 +65,8 @@ final class DictionaryTests: XCTestCase {
         d.add(english: "=SUM(1,2)", japanese: "式", source: "x.com", sourceURL: nil, now: t0)
         d.add(english: "say \"hi\", ok", japanese: "挨拶", source: "x.com", sourceURL: nil, now: t0)
         let rows = d.csv().components(separatedBy: "\r\n")
-        XCTAssertEqual(rows[0], "english,japanese,source,url,note,saved_at")
-        XCTAssertTrue(rows[1].hasPrefix("\"say \"\"hi\"\", ok\",挨拶,x.com,"))
+        XCTAssertEqual(rows[0], "english,japanese,type,details,context_en,context_ja,source,url,note,saved_at")
+        XCTAssertTrue(rows[1].hasPrefix("\"say \"\"hi\"\", ok\",挨拶,expression,,,,x.com,"), rows[1])
         XCTAssertTrue(rows[2].hasPrefix("'=SUM(1,2)") || rows[2].hasPrefix("\"'=SUM(1,2)\""), rows[2])
         XCTAssertEqual(d.plainText(), "say \"hi\", ok — 挨拶\n=SUM(1,2) — 式")
     }
@@ -122,6 +122,49 @@ final class DictionaryTests: XCTestCase {
         XCTAssertEqual(e.japanese, "あ\u{200D}い")
         d.add(english: "x,\u{301}y", japanese: "結合", source: "", sourceURL: nil)         // "," followed by a combining mark is one Character
         XCTAssertTrue(d.csv().contains("\"x,\u{301}y\""))
+    }
+
+    func testAWordKeepsTheSentenceItWasReadInAndStartsWithoutAMeaning() {
+        var d = DictionaryData()
+        guard case .added(let e) = d.addPendingWord("have", contextEnglish: "I have lunch at noon", contextJapanese: "正午に昼食を食べます", source: "x.com", sourceURL: nil, now: t0) else { return XCTFail() }
+        XCTAssertEqual(e.kind, .word); XCTAssertEqual(e.english, "have"); XCTAssertEqual(e.japanese, "")
+        XCTAssertEqual(e.contextEnglish, "I have lunch at noon"); XCTAssertEqual(e.contextJapanese, "正午に昼食を食べます"); XCTAssertEqual(e.meaning, .pending)
+        XCTAssertEqual(d.pendingWords.map(\.id), [e.id])
+        guard case .duplicate = d.addPendingWord("Have", contextEnglish: "x", contextJapanese: "正午に昼食を食べます", source: "", sourceURL: nil) else { return XCTFail("the same word in the same sentence") }
+        guard case .added = d.addPendingWord("have", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています", source: "", sourceURL: nil) else { return XCTFail("the same word in another sentence is another entry") }
+        XCTAssertEqual(d.pendingWords.count, 2)
+        XCTAssertEqual(d.search("昼食").count, 1, "the sentence is searchable")
+        XCTAssertEqual(d.search("noon").count, 1)
+        XCTAssertTrue(d.csv().contains(",word,,I have lunch at noon,正午に昼食を食べます,x.com,"))
+        XCTAssertEqual(d.plainText().components(separatedBy: "\n").last, "have — 正午に昼食を食べます", "no meaning yet: the sentence stands in for it")
+    }
+
+    func testTheMeaningArrivesLaterAndFillsTheEntry() throws {
+        var d = DictionaryData()
+        guard case .added(let e) = d.addPendingWord("took", contextEnglish: "She took a stroll", contextJapanese: "彼女は散歩した", source: "", sourceURL: nil) else { return XCTFail() }
+        let json: [String: Any] = ["card": ["kind": "word", "lemma": "take", "pos": "動詞", "contextMeaning": "（散歩を）する", "contextIndex": 0, "meanings": [["meaning": "（散歩を）する"], ["meaning": "取る"]]]]
+        guard let card = DefinitionCard.decode(serverResponse: try JSONSerialization.data(withJSONObject: json)) else { return XCTFail() }
+        d.setCard(id: e.id, card: card)
+        let now = d.entries.first { $0.id == e.id }!
+        XCTAssertEqual(now.japanese, "（散歩を）する"); XCTAssertEqual(now.meaning, .none); XCTAssertNotNil(now.card)
+        XCTAssertEqual(now.english, "took", "the word as it was read"); XCTAssertEqual(now.contextEnglish, "She took a stroll")
+        XCTAssertTrue(d.pendingWords.isEmpty)
+    }
+
+    func testAFailedLookupCanBeMarkedAndRetried() {
+        var d = DictionaryData()
+        guard case .added(let e) = d.addPendingWord("have", contextEnglish: "", contextJapanese: "あ", source: "", sourceURL: nil) else { return XCTFail() }
+        d.setMeaningState(id: e.id, .failed)
+        XCTAssertTrue(d.pendingWords.isEmpty)
+        d.setMeaningState(id: e.id, .pending)
+        XCTAssertEqual(d.pendingWords.count, 1)
+    }
+
+    func testOldFilesLoadWithoutContextFields() throws {
+        let old = #"{"version":2,"entries":[{"id":"00000000-0000-0000-0000-000000000003","kind":"word","english":"have","japanese":"持つ","source":"x.com","note":"","savedAt":"2027-01-01T00:00:00Z"}]}"#
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        let d = try dec.decode(DictionaryData.self, from: Data(old.utf8))
+        XCTAssertEqual(d.entries.first?.contextEnglish, ""); XCTAssertEqual(d.entries.first?.meaning, MeaningState.none); XCTAssertTrue(d.pendingWords.isEmpty)
     }
 }
 

@@ -51,6 +51,34 @@ def test_client_ip_rules(ip, lan, ok):
         assert r.status_code == 403 and fake.calls == []
 
 
+# Tailscale: `tailscale serve --tcp` forwards tailnet connections to localhost, so the server sees a loopback
+# client. The Host name still has to be allow-listed explicitly, and a tailnet address that reaches the
+# server directly (no forward configured) is never accepted as a "private" client.
+TAILNET_HOSTS = ("yuya-4.example.ts.net", "100.85.102.91")
+
+
+@pytest.mark.parametrize("host", ["yuya-4.example.ts.net:8000", "100.85.102.91:8000"])
+def test_tailscale_hosts_need_the_explicit_allow_list(host):
+    allowed, _ = make_client(allow_lan=True, client_ip="127.0.0.1", extra_hosts=TAILNET_HOSTS)
+    assert post(allowed, {"host": host}).status_code == 200
+    not_listed, fake = make_client(allow_lan=True, client_ip="127.0.0.1")
+    assert post(not_listed, {"host": host}).status_code == 400 and fake.calls == []
+
+
+def test_tailscale_names_are_not_trusted_just_because_they_look_like_tailscale():
+    client, fake = make_client(allow_lan=True, client_ip="127.0.0.1", extra_hosts=TAILNET_HOSTS)
+    for host in ("other.example.ts.net", "100.64.0.1", "evil.com"):
+        assert post(client, {"host": host}).status_code == 400
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("ip", ["100.91.104.56", "100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::e338:665d"])
+def test_a_tailnet_client_that_reaches_the_server_directly_is_refused(ip):
+    client, fake = make_client(allow_lan=True, client_ip=ip, extra_hosts=TAILNET_HOSTS)
+    r = post(client, {"host": "100.85.102.91:8000"})
+    assert r.status_code == 403 and fake.calls == []
+
+
 def test_forwarded_header_is_not_trusted():
     client, _ = make_client(client_ip="8.8.8.8", allow_lan=True)
     assert post(client, {"x-forwarded-for": "192.168.1.2"}).status_code == 403

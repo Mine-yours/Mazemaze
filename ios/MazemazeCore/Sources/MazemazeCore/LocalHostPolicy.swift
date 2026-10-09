@@ -12,6 +12,16 @@ public enum LocalHostPolicy {
     /// not an unambiguous dotted-quad IPv4, `localhost`, `::1` or a `*.local` name is refused,
     /// so the string that is checked is the host that is actually contacted.
     public static func validate(_ raw: String) -> Result<URL, Rejection> {
+        validate(raw, accepting: isLocalHost)
+    }
+
+    /// The Mac's name on the owner's Tailscale network (`<mac>.<tailnet>.ts.net`), used
+    /// away from home. Only ever accepted over https with a pinned certificate (see `SettingsStore.serverConfig`).
+    public static func validateTailscale(_ raw: String) -> Result<URL, Rejection> {
+        validate(raw, accepting: isTailscaleHost)
+    }
+
+    private static func validate(_ raw: String, accepting accept: (String) -> Bool) -> Result<URL, Rejection> {
         // No trimming here: whitespace, control characters or backslashes mean the string is
         // ambiguous between parsers.
         for scalar in raw.unicodeScalars where scalar.value <= 0x20 || scalar.value >= 0x7F || scalar == "\\" {
@@ -27,7 +37,7 @@ public enum LocalHostPolicy {
         if let port = comps.port, !(1...65535).contains(port) { return .failure(.badPort) }
         guard var host = comps.host?.lowercased(), !host.isEmpty else { return .failure(.malformed) }
         if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-        guard isLocalHost(host) else { return .failure(.notLocal) }
+        guard accept(host) else { return .failure(.notLocal) }
 
         var out = URLComponents()
         out.scheme = scheme
@@ -44,6 +54,17 @@ public enum LocalHostPolicy {
         if host.contains(":") { return false }  // every other IPv6 form is refused
         if let octets = canonicalIPv4(host) { return isPrivate(octets) }
         return isMulticastDNSName(host)
+    }
+
+    /// A `<node>.<tailnet>.ts.net` name (lowercase letters, digits, hyphens). IP addresses (100.64.0.0/10) are not
+    /// accepted: the app's ATS exception covers `ts.net` names only, and a name survives an address change.
+    public static func isTailscaleHost(_ host: String) -> Bool {
+        guard host.hasSuffix(".ts.net"), host.count > ".ts.net".count, host.count <= 253 else { return false }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        return labels.count >= 4 && labels.allSatisfy { l in
+            !l.isEmpty && l.count <= 63 && !l.hasPrefix("-") && !l.hasSuffix("-") &&
+                l.unicodeScalars.allSatisfy { ($0.value >= 0x30 && $0.value <= 0x39) || ($0.value >= 0x61 && $0.value <= 0x7A) || $0 == "-" }
+        }
     }
 
     /// Only canonical decimal dotted-quad ("192.168.0.1"); "0177.0.0.1", "127.1", "2130706433",

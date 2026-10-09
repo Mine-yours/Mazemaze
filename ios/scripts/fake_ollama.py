@@ -43,6 +43,23 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(0.4)   # slow enough that the self-test can snapshot the page before the first translation lands
             content = body["messages"][-1]["content"]
             try:
+                user = json.loads(content)
+                if isinstance(user, dict) and "source_ja" in user:       # /api/define: a word or phrase card (two steps)
+                    props = (body.get("format") or {}).get("properties", {})
+                    if "senses" in props:
+                        card = {"matchInSource": "持っています", "lemma": user["word"].lower(), "pos": "動詞", "contextIndex": 0,
+                                "senses": [{"gloss": "持つ・所有する"}, {"gloss": "食べる・飲む"}, {"gloss": "経験する"}]}
+                    elif "phrases" in props:
+                        card = {"example": {"en": "I have a pen.", "ja": "私はペンを持っています。"}, "phrases": ["have to", "have been"], "note": "have to は「〜しなければならない」"}
+                    elif "points" in props:
+                        card = {"points": [{"expr": "have", "note": "所有を表す"}], "synonyms": ["I've got a pen"], "example": {"en": "I have a red pen.", "ja": "赤いペンを持っています。"}}
+                    else:
+                        card = {"meaning": "私はペンを持っています", "nuance": "ごく基本的な言い方"}
+                    self._json({"message": {"content": json.dumps(card, ensure_ascii=False)}})
+                    return
+            except (ValueError, TypeError):
+                pass
+            try:
                 spans = json.loads(content)["spans"]          # Qwen adapter (JSON request)
                 items = [{"id": s["id"], "en": f"English {i}"} for i, s in enumerate(spans, 1)]
                 self._json({"message": {"content": json.dumps({"items": items})}})

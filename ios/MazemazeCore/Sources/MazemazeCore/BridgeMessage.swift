@@ -6,6 +6,7 @@ public enum BridgeRequest: Equatable {
     case ready
     case translate(gen: Int, text: String)   // ratio / unit come from Swift settings, never from the page
     case save(english: String, japanese: String)   // "辞書に保存": the person tapped the button in the popover
+    case lookup(LookupRequest)                      // "意味を調べる": open the lookup sheet (the page never sees the card)
 }
 
 public enum BridgeError: Error, Equatable { case malformed(String) }
@@ -29,6 +30,14 @@ public enum BridgeMessage {
             guard Set(dict.keys) == ["type", "en", "ja"] else { return .failure(.malformed("keys")) }
             guard let en = dict["en"] as? String, validTerm(en), let ja = dict["ja"] as? String, validTerm(ja) else { return .failure(.malformed("term")) }
             return .success(.save(english: en, japanese: ja))
+        case "lookup":
+            guard Set(dict.keys) == ["type", "kind", "term", "en", "ja"] else { return .failure(.malformed("keys")) }
+            guard let kindRaw = dict["kind"] as? String, let kind = LookupKind(rawValue: kindRaw),
+                  let term = dict["term"] as? String, let en = dict["en"] as? String, let ja = dict["ja"] as? String,
+                  term.unicodeScalars.count <= LookupRequest.maxPhraseScalars, en.unicodeScalars.count <= 4 * LookupRequest.maxContextScalars,
+                  ja.unicodeScalars.count <= 4 * LookupRequest.maxContextScalars,
+                  let request = LookupRequest.make(kind: kind, term: term, contextEnglish: en, contextJapanese: ja) else { return .failure(.malformed("lookup")) }
+            return .success(.lookup(request))
         default:
             return .failure(.malformed("type"))
         }

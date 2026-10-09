@@ -19,6 +19,8 @@ struct SettingsView: View {
     @State private var confirmClear = false
     @State private var xIdentity = true
     @State private var autoHideBars = true
+    @State private var embedDictionary = true
+    @State private var autoMeaning = true
 
     var body: some View {
         NavigationStack {
@@ -82,6 +84,22 @@ struct SettingsView: View {
                         .onChange(of: autoHideBars) { v in model.settings.autoHideBars = v; model.settings.flush(); if !v { model.active.revealBars() } }
                 } header: { Text("表示") } footer: {
                     Text("ページを下にスクロールすると、アドレス欄とツールバーが隠れて、画面を広く使えます。上にスクロールするか、下の「メニューを表示」を押すと戻ります。VoiceOver 使用中は隠しません。")
+                }
+
+                Section {
+                    Toggle("標準辞書をシートの中に表示", isOn: $embedDictionary)
+                        .onChange(of: embedDictionary) { v in model.settings.embedDictionary = v; model.settings.flush() }
+                } footer: {
+                    Text(model.settings.embedDictionaryCrashed
+                         ? "単語の意味のシートで標準辞書を表示しているときにアプリが落ちたため、自動でオフにしました。オンに戻すと、もう一度試します（また落ちたら、再びオフになります）。オフの間は、ボタンを押すと別のシートで開きます。"
+                         : "単語の意味のシートの中に、iPhone の標準辞書の内容を直接表示します。オフにすると、ボタンを押したときに別のシートで開きます。")
+                }
+
+                Section {
+                    Toggle("保存した単語の意味を、裏で自動で調べる", isOn: $autoMeaning)
+                        .onChange(of: autoMeaning) { v in model.settings.autoMeaning = v; model.settings.flush(); if v { model.startMeaningWorker() } }
+                } footer: {
+                    Text("標準辞書から単語を保存すると、Mac のローカルモデルが、その文での意味を調べて項目に入れます。翻訳を優先するため、しばらく翻訳がない間に、1 件ずつ調べます。Mac が止まっているときは、あとで自動でやり直します。")
                 }
 
                 Section("翻訳") {
@@ -152,6 +170,8 @@ struct SettingsView: View {
                 ratioDraft = model.ratio
                 xIdentity = model.settings.safariIdentityForX
                 autoHideBars = model.settings.autoHideBars
+                embedDictionary = model.settings.embedDictionary
+                autoMeaning = model.settings.autoMeaning
             }
             .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft }; save() }
         }
@@ -180,6 +200,7 @@ struct SettingsView: View {
             if newURL != model.settings.serverURLString {          // typed by hand: the paired certificate / fallback no longer apply
                 model.settings.pinnedFingerprint = nil
                 model.settings.fallbackURLString = ""
+                model.settings.tailscaleURLString = ""
                 model.settings.serverName = ""
                 model.settings.serverURLString = newURL
                 changed = true

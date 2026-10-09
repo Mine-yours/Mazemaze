@@ -681,3 +681,102 @@ final class ResolverAndPinServiceTests: XCTestCase {
         XCTAssertTrue(report.message.contains("証明書"))
     }
 }
+
+final class TailscaleResolverTests: XCTestCase {
+    func cfg() -> ServerConfig {
+        ServerConfig(baseURL: URL(string: "https://mac.local:8000")!, token: "t", fallbackURL: URL(string: "https://192.168.0.19:8000")!,
+                     pinnedFingerprint: String(repeating: "ab", count: 32), tailscaleURL: URL(string: "https://yuya-4.tailb93afe.ts.net:8000")!)
+    }
+
+    func testAwayFromHomeTheTailscaleAddressIsUsed_withShortHomeProbesAndNoToken() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "yuya-4.tailb93afe.ts.net" { return serverUnauthorized() }
+            throw URLError(.timedOut)
+        }
+        let chosen = await EndpointResolver(transport: t).resolve(cfg())
+        XCTAssertEqual(chosen.host, "yuya-4.tailb93afe.ts.net")
+        XCTAssertEqual(t.requests.map { $0.url.host }, ["mac.local", "192.168.0.19", "yuya-4.tailb93afe.ts.net"])
+        XCTAssertEqual(t.requests.map { $0.timeout }, [1.5, 1.5, 6])
+        XCTAssertTrue(t.requests.allSatisfy { $0.headers["X-Mazemaze-Token"] == nil })
+    }
+
+    func testAtHomeTheTailscaleAddressIsNeverProbed() async {
+        let t = MockTransport { _, _ in serverUnauthorized() }
+        let chosen = await EndpointResolver(transport: t).resolve(cfg())
+        XCTAssertEqual(chosen.host, "mac.local")
+        XCTAssertEqual(t.requests.map { $0.url.host }, ["mac.local"])
+    }
+
+    func testTheHomeIPAddressStillBeatsTailscale() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "mac.local" { throw URLError(.cannotFindHost) }
+            return serverUnauthorized()
+        }
+        let chosen = await EndpointResolver(transport: t).resolve(cfg())
+        XCTAssertEqual(chosen.host, "192.168.0.19")
+        XCTAssertFalse(t.requests.contains { $0.url.host == "yuya-4.tailb93afe.ts.net" })
+    }
+
+    func testAnotherDeviceAtTheTailscaleAddressIsNotTheServer() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "yuya-4.tailb93afe.ts.net" { return HTTPResponse(status: 401, body: Data("Unauthorized".utf8)) }
+            throw URLError(.timedOut)
+        }
+        let chosen = await EndpointResolver(transport: t).resolve(cfg())
+        XCTAssertEqual(chosen.host, "mac.local")                 // nobody qualified: the primary is kept
+    }
+
+    func testAConfigWithoutTailscaleKeepsTheOldTimeouts() async {
+        let t = MockTransport { _, _ in throw URLError(.timedOut) }
+        let c = ServerConfig(baseURL: URL(string: "http://mac.local:8000")!, token: "t", fallbackURL: URL(string: "http://192.168.0.19:8000")!)
+        _ = await EndpointResolver(transport: t).resolve(c)
+        XCTAssertEqual(t.requests.map { $0.timeout }, [3, 3])
+    }
+
+    func testAPinnedTailscaleServerWithAnotherCertificateIsNotChosen() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "yuya-4.tailb93afe.ts.net" { throw PinMismatchError() }
+            throw URLError(.timedOut)
+        }
+        let chosen = await EndpointResolver(transport: t).resolve(cfg())
+        XCTAssertEqual(chosen.host, "mac.local")
+    }
+}
+
+final class ProbeReportTests: XCTestCase {
+    func cfg(tailscale: Bool = true) -> ServerConfig {
+        ServerConfig(baseURL: URL(string: "https://mac.local:8000")!, token: "t", fallbackURL: URL(string: "https://192.168.0.19:8000")!,
+                     pinnedFingerprint: String(repeating: "ab", count: 32), tailscaleURL: tailscale ? URL(string: "https://yuya-4.tailb93afe.ts.net:8000")! : nil)
+    }
+
+    func testTheReportNamesEveryAddressThatWasTried_withoutURLsOrTheToken() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "mac.local" { throw URLError(.cannotFindHost) }
+            if r.url.host == "yuya-4.tailb93afe.ts.net" { throw URLError(.timedOut) }
+            throw URLError(.timedOut)
+        }
+        let report = await ConnectionChecker.check(config: cfg(), transport: t, resolver: EndpointResolver(transport: t))
+        XCTAssertEqual(report.state, .failed)
+        XCTAssertTrue(report.message.contains("Mac の名前: 名前が見つからない"), report.message)
+        XCTAssertTrue(report.message.contains("家の IP アドレス: 応答なし"), report.message)
+        XCTAssertTrue(report.message.contains("Tailscale（外出先）: 応答なし"), report.message)
+        XCTAssertFalse(report.message.contains("yuya-4.tailb93afe.ts.net") || report.message.contains("192.168.0.19") || report.message.contains("mac.local:8000"))
+    }
+
+    func testAMissingTailscaleAddressIsSaid() async {
+        let t = MockTransport { _, _ in throw URLError(.timedOut) }
+        let report = await ConnectionChecker.check(config: cfg(tailscale: false), transport: t, resolver: EndpointResolver(transport: t))
+        XCTAssertTrue(report.message.contains("この設定には入っていません"), report.message)
+    }
+
+    func testPinMismatchAndOtherDevicesAreDistinguished() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "yuya-4.tailb93afe.ts.net" { throw PinMismatchError() }
+            return HTTPResponse(status: 404)
+        }
+        let resolver = EndpointResolver(transport: t)
+        _ = await resolver.resolve(cfg())
+        let probes = await resolver.lastProbes
+        XCTAssertEqual(probes.map { $0.outcome }, [.notMazemaze(status: 404), .notMazemaze(status: 404), .pinMismatch])
+    }
+}

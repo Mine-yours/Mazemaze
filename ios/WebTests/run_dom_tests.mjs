@@ -45,6 +45,7 @@ window.webkit = { messageHandlers: { mazemaze: { postMessage: function (m) { ret
 window.__bridge = async function (msg) {
   var mk = window.__mock; mk.log.push(msg);
   if (msg.type === "ready") return { gen: mk.gen, enabled: mk.enabled, profile: mk.profile };
+  if (msg.type === "lookup") { if (mk.lookupFail) throw new Error("no sheet"); return { ok: true }; }
   if (msg.type === "save") { if (mk.saveFail) throw new Error("save failed"); return { ok: true, status: mk.saveStatus || "saved" }; }
   if (msg.type !== "translate") return { ok: false, error: "rejected" };
   mk.inflight++; mk.maxInflight = Math.max(mk.maxInflight, mk.inflight);
@@ -54,9 +55,9 @@ window.__bridge = async function (msg) {
   if (mk.mode.indexOf("error:") === 0) return { ok: false, error: mk.mode.slice(6), message: "" };
   if (msg.gen !== mk.gen) return { ok: false, error: "stale", message: "" };
   if (mk.mode === "mismatch") return { ok: true, segments: [{ kind: "ja", source: msg.text + " ", display: msg.text + " " }] };
-  return { ok: true, segments: fake(msg.text, mk.mode === "xssen") };
+  return { ok: true, segments: fake(msg.text, mk.mode === "xssen", mk.mode) };
 };
-function fake(text, evil) {
+function fake(text, evil, mode) {
   var segs = [], n = 0;
   function push(kind, source, display) {
     if (kind === "ja" && segs.length && segs[segs.length - 1].kind === "ja") { segs[segs.length - 1].source += source; segs[segs.length - 1].display += source; }
@@ -71,7 +72,7 @@ function fake(text, evil) {
       var lead = (/^\\s*/.exec(body) || [""])[0]; body = body.slice(lead.length);
       var trail = (/\\s*$/.exec(body) || [""])[0]; body = body.slice(0, body.length - trail.length);
       push("ja", lead, lead);
-      if (body.length >= 4 && !/[A-Za-z0-9]/.test(body) && (n++ % 2 === 0)) push("en", body, evil ? "<img src=x onerror=window.__xss=3>" : "EN" + n + " " + body.length);
+      if (body.length >= 4 && !/[A-Za-z0-9]/.test(body) && (n++ % 2 === 0)) push("en", body, evil ? "<img src=x onerror=window.__xss=3>" : (mode === "words" ? "I have a pen" : (mode === "oneword" ? "Hello" : "EN" + n + " " + body.length)));
       else push("ja", body, body);
       push("ja", trail + tail, trail + tail);
     });
@@ -452,37 +453,107 @@ for (const mode of ["ok", "xssen"]) {
   check("辞書: 英語部分のタップ自体もページのクリック処理へ伝播しない", (await ev("window.__bodyClicks")) === 0);
   const en = await ev("document.querySelector('#p1 [data-mz-en]').textContent");
   const popTxt = await ev("document.querySelector('[data-mazemaze-ui] span').textContent");
-  check("辞書: 吹き出しに「辞書に保存」ボタンがあり、日本語の原文も表示される", (await ev("(function(){var b=document.querySelector('[data-mazemaze-ui] button');return b&&b.textContent==='辞書に保存'})()")) && /[ぁ-ん一-龥]/.test(popTxt));
-  await tapEl("[data-mazemaze-ui] button");
+  check("辞書: 吹き出しに「辞書に保存」ボタンがあり、日本語の原文も表示される", (await ev("(function(){var b=document.querySelector('[data-mazemaze-ui] button:last-of-type');return b&&b.textContent==='辞書に保存'})()")) && /[ぁ-ん一-龥]/.test(popTxt));
+  await tapEl("[data-mazemaze-ui] button:last-of-type");
   await sleep(200);
   const saves = await ev("window.__mock.log.filter(function(m){return m.type==='save'})");
   check("辞書: 押すと { type, en, ja } だけを送る（英語は画面の英語、日本語は原文）", saves.length === 1 && Object.keys(saves[0]).sort().join() === "en,ja,type" && saves[0].en === en && saves[0].ja === popTxt, JSON.stringify(saves));
-  check("辞書: 保存後はボタンが「保存しました」になり、吹き出しは残る", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存しました");
+  check("辞書: 保存後はボタンが「保存しました」になり、吹き出しは残る", (await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').textContent")) === "保存しました");
   check("辞書: ボタンを押してもページのクリック処理へ伝播しない", (await ev("window.__bodyClicks")) === 0);
-  await tapEl("[data-mazemaze-ui] button");
+  await tapEl("[data-mazemaze-ui] button:last-of-type");
   await sleep(150);
   check("辞書: 連打しても 1 回しか送らない", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === 1);
   await ev("window.__mock.saveStatus='duplicate';0");
   await tapEl("body"); await sleep(100);
   await tapEl("#p1 [data-mz-en]"); await sleep(150);
-  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
-  check("辞書: すでに保存済みなら「保存済みです」と出る", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存済みです");
+  await tapEl("[data-mazemaze-ui] button:last-of-type"); await sleep(200);
+  check("辞書: すでに保存済みなら「保存済みです」と出る", (await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').textContent")) === "保存済みです");
   await ev("window.__mock.saveFail=true;0");
   await tapEl("body"); await sleep(100);
   await tapEl("#p1 [data-mz-en]"); await sleep(150);
-  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
-  check("辞書: 保存に失敗したら「保存できませんでした」と出る（例外にならない）", (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存できませんでした");
+  await tapEl("[data-mazemaze-ui] button:last-of-type"); await sleep(200);
+  check("辞書: 保存に失敗したら「保存できませんでした」と出る（例外にならない）", (await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').textContent")) === "保存できませんでした");
   await ev("window.__mock.saveFail=false;window.__mock.saveStatus='saved';0");
-  await ev("document.querySelector('[data-mazemaze-ui] button').click()");          // a script's click (not trusted)
+  await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').click()");          // a script's click (not trusted)
   await sleep(200);
   const before = await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length");
-  await ev("document.querySelector('[data-mazemaze-ui] button').click()");
+  await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').click()");
   await sleep(200);
   check("辞書: 信頼されていない click() は送信を増やさない", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === before);
-  await tapEl("[data-mazemaze-ui] button"); await sleep(200);
-  check("辞書: 失敗のあとでも、本物のタップなら再試行できる", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === before + 1 && (await ev("document.querySelector('[data-mazemaze-ui] button').textContent")) === "保存しました");
+  await tapEl("[data-mazemaze-ui] button:last-of-type"); await sleep(200);
+  check("辞書: 失敗のあとでも、本物のタップなら再試行できる", (await ev("window.__mock.log.filter(function(m){return m.type==='save'}).length")) === before + 1 && (await ev("document.querySelector('[data-mazemaze-ui] button:last-of-type').textContent")) === "保存しました");
   await ev("window.__mazemaze.restoreAll()");
   check("辞書: 吹き出し・ボタンは原文復元の邪魔をしない（元のページと同じ）", (await count("[data-mz-en]")) === 0);
+}
+
+
+// ---- 14. "意味を調べる": a word under the finger, or the whole phrase -------------------------------------------
+{
+  await load("static.html", { mode: "words" });
+  await settle();
+  const wordCenter = (w) => ev(`(function(){var el=document.querySelector('#p1 [data-mz-en]');var t=el.firstChild.nodeValue;var i=t.indexOf(${JSON.stringify(w)});var r=document.createRange();r.setStart(el.firstChild,i);r.setEnd(el.firstChild,i+${w.length});var b=r.getBoundingClientRect();el.scrollIntoView({block:"center"});b=r.getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2}})()`);
+  const click = async (c) => { for (const type of ["mousePressed", "mouseReleased"]) await send("Input.dispatchMouseEvent", { type, x: c.x, y: c.y, button: "left", clickCount: 1 }); };
+  const labels = () => ev("Array.from(document.querySelectorAll('[data-mazemaze-ui] button')).map(function(b){return b.textContent})");
+  await click(await wordCenter("have"));
+  await sleep(200);
+  let l = await labels();
+  check("調べる: 単語（have）を直接タップすると「have の意味を調べる」と「句全体」と「辞書に保存」が出る", JSON.stringify(l) === JSON.stringify(["「have」の意味を調べる", "句全体の意味を調べる", "辞書に保存"]), JSON.stringify(l));
+  const lookupBtn = "[data-mazemaze-ui] button:first-of-type";
+  await tapEl(lookupBtn);
+  await sleep(250);
+  const sent = await ev("window.__mock.log.filter(function(m){return m.type==='lookup'})");
+  const src = await ev("(function(){return window.__mock.log.filter(function(m){return m.type==='lookup'}).map(function(m){return m.ja})[0]})()");
+  check("調べる: { type, kind, term, en, ja } だけを送る（term は押した単語、en は画面の英語、ja は原文）", sent.length === 1 && Object.keys(sent[0]).sort().join() === "en,ja,kind,term,type" && sent[0].kind === "word" && sent[0].term === "have" && sent[0].en === "I have a pen" && /[ぁ-ん一-龥]/.test(src), JSON.stringify(sent));
+  check("調べる: アプリが受け付けたら吹き出しは閉じる（カードはアプリ側に出る）", (await count("[data-mazemaze-ui]")) === 0);
+  // the second word, then the whole phrase
+  await click(await wordCenter("pen"));
+  await sleep(200);
+  await tapEl("[data-mazemaze-ui] button:first-of-type"); await sleep(200);
+  const s2 = await ev("window.__mock.log.filter(function(m){return m.type==='lookup'})");
+  check("調べる: 別の単語（pen）も指して調べられる", s2.length === 2 && s2[1].term === "pen", JSON.stringify(s2[1]));
+  await click(await wordCenter("have"));
+  await sleep(200);
+  await tapEl("[data-mazemaze-ui] button:nth-of-type(2)"); await sleep(200);
+  const s3 = await ev("window.__mock.log.filter(function(m){return m.type==='lookup'})");
+  check("調べる: 「句全体の意味を調べる」は kind=phrase、term=英語全体で送る", s3.length === 3 && s3[2].kind === "phrase" && s3[2].term === "I have a pen" && s3[2].en === "I have a pen", JSON.stringify(s3[2]));
+  // a script's click does nothing
+  await click(await wordCenter("have"));
+  await sleep(200);
+  await ev("document.querySelector('[data-mazemaze-ui] button:first-of-type').click()");
+  await sleep(200);
+  check("調べる: ページのスクリプトの click() では送らない", (await ev("window.__mock.log.filter(function(m){return m.type==='lookup'}).length")) === 3);
+  // the sheet could not be opened -> a message, and the person can try again
+  await ev("window.__mock.lookupFail=true;0");
+  await tapEl("[data-mazemaze-ui] button:first-of-type"); await sleep(250);
+  check("調べる: 開けなかったら「開けませんでした」と出て、もう一度押せる", (await ev("document.querySelector('[data-mazemaze-ui] button:first-of-type').textContent")) === "開けませんでした");
+  await ev("window.__mock.lookupFail=false;0");
+  await tapEl("[data-mazemaze-ui] button:first-of-type"); await sleep(250);
+  check("調べる: 失敗のあとでも再試行できる", (await ev("window.__mock.log.filter(function(m){return m.type==='lookup'}).length")) === 5 && (await count("[data-mazemaze-ui]")) === 0);
+
+  // another word of the same span, without closing the popover first: it shows that word's buttons (not just closes)
+  await load("static.html", { mode: "words" });
+  await settle();
+  await click(await wordCenter("have")); await sleep(200);
+  await click(await wordCenter("pen")); await sleep(200);
+  l = await labels();
+  check("調べる: 同じ英語の別の単語（pen）をタップすると、閉じずに pen のボタンに切り替わる", l[0] === "「pen」の意味を調べる", JSON.stringify(l));
+  await click(await wordCenter("pen")); await sleep(200);
+  check("調べる: 同じ単語をもう一度タップすると閉じる", (await count("[data-mazemaze-ui]")) === 0);
+
+  // an English span with one word: a single lookup button, no phrase button
+  await load("static.html", { mode: "oneword" });
+  await settle();
+  await tapEl("#p1 [data-mz-en]");
+  await sleep(200);
+  l = await labels();
+  check("調べる: 英語が 1 語だけなら「その語を調べる」だけ（句のボタンなし）", JSON.stringify(l) === JSON.stringify(["「Hello」の意味を調べる", "辞書に保存"]), JSON.stringify(l));
+  // a position that cannot be told (VoiceOver's synthetic click at 0,0): the phrase button, no single word
+  await load("static.html", { mode: "words" });
+  await settle();
+  await ev("(function(){var el=document.querySelector('#p1 [data-mz-en]');el.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:0,clientY:0}))})()");
+  await sleep(200);
+  l = await labels();
+  check("調べる: タップ位置が分からないとき（VoiceOver）は句全体のボタンだけ（シートで単語を選べる）", JSON.stringify(l) === JSON.stringify(["句全体の意味を調べる", "辞書に保存"]), JSON.stringify(l));
 }
 
 // ---- 12. paste page ("貼り付けて翻訳"): the app's own template, filled by paste_fill.js ----------------------
