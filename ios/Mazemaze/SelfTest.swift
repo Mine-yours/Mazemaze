@@ -235,6 +235,60 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             if let w = first.webView { web = w }       // the first tab may have slept and woken with a new web view
 
+            // ---- "貼り付けて翻訳": the app's own page, same pipeline, not a tab, not reachable from anywhere else
+            let pasteLines = ["今日は晴れていて、散歩に出かけるのにちょうど良い天気です。", "", "短い", "<img src=x onerror=window.__xss=1>テストの文章がここにあります。これは日本語の文章です。", "もう一行、日本語のしっかりした長さの文章がここに入ります。それから続きます。"]
+            let pasteOriginal = pasteLines.joined(separator: "\n")
+            let tabsBeforePaste = app.tabs.count
+            app.openPaste()                                  // the result page must be on screen (visible-first translation)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            app.startPaste(lines: pasteLines)
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if let pt = app.pasteTab {
+                var ok = 0
+                for _ in 0..<150 { ok = pt.okCount; if ok > 0 { break }; try? await Task.sleep(nanoseconds: 400_000_000) }
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                report("paste: it is not one of the tabs (never listed, saved or put to sleep)", app.tabs.count == tabsBeforePaste && !app.tabs.contains { $0.id == pt.id })
+                var ptStatus: [String: Any] = [:]
+                if let w = pt.webView {
+                    ptStatus = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any], Never>) in
+                        w.callAsyncJavaScript("return window.__mazemaze ? window.__mazemaze.status() : { missing: true, nodes: document.querySelectorAll('#out > div').length }", arguments: [:], in: nil, in: BrowserCoordinator.world) { r in
+                            if case .success(let v) = r, let d = v as? [String: Any] { cont.resume(returning: d) } else { cont.resume(returning: ["evalFailed": true]) }
+                        }
+                    }
+                }
+                report("paste: the page is the app's own address and the same translation pipeline works on it", PasteSurface.isPasteURL(pt.webView?.url) && ok > 0, "url=\(pt.webView?.url?.absoluteString ?? "nil") ok=\(ok) problem=\(pt.lastProblem ?? "-") site=\(pt.siteStatus) status=\(ptStatus)")
+                let shown = await pt.coordinator?.pasteText() ?? ""
+                report("paste: English is mixed in and the line structure is kept", shown != pasteOriginal && shown.split(separator: "\n", omittingEmptySubsequences: false).count == pasteLines.count && !shown.contains("\u{200B}"), shown)
+                if let w = pt.webView {
+                    let seen = await withCheckedContinuation { (cont: CheckedContinuation<[String: Any]?, Never>) in
+                        w.callAsyncJavaScript("return { api: typeof window.__mazemaze, handler: typeof (window.webkit && window.webkit.messageHandlers), xss: typeof window.__xss, imgs: document.querySelectorAll('#out img').length }", arguments: [:], in: nil, in: .page) { r in
+                            if case .success(let v) = r { cont.resume(returning: v as? [String: Any]) } else { cont.resume(returning: nil) }
+                        }
+                    }
+                    report("paste: the page itself cannot see the translator or the bridge, and pasted markup stays text", (seen?["api"] as? String) == "undefined" && (seen?["xss"] as? String) == "undefined" && (seen?["imgs"] as? Int) == 0, "\(seen ?? [:])")
+                    w.load(URLRequest(url: URL(string: "https://example.com/")!))
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    report("paste: the page cannot be taken anywhere else", PasteSurface.isPasteURL(w.url), "\(w.url?.absoluteString ?? "nil")")
+                }
+                if let w1 = first.webView {
+                    w1.load(URLRequest(url: PasteSurface.url))
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    report("paste: no ordinary tab can open the app's private address", !PasteSurface.touchesPasteHost(w1.url), "\(w1.url?.absoluteString ?? "nil")")
+                }
+                pt.restoreOriginal()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let restored = await pt.coordinator?.pasteText() ?? ""
+                report("paste: \"原文に戻す\" restores exactly what was pasted", restored == pasteOriginal, restored)
+            } else {
+                report("paste: a result page is created", false)
+            }
+            app.closePaste()
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            report("paste: closing it drops the result page and the screen", app.pasteTab == nil && !app.showPaste)
+            app.activate(first.id)
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if let w = first.webView { web = w }
+
             // Wrong token: the page keeps its original text and the user sees a clear message.
             let goodToken = app.settings.token
             try? app.settings.setToken("wrong-token")

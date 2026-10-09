@@ -244,6 +244,18 @@ for (const mode of ["ok", "xssen"]) {
   check("X 風: 復元で完全一致", (await ev("document.body.innerHTML")) === before);
 }
 
+// ---- 7b. X-like profile, newer markup without data-testid ----------------------------------------
+{
+  const before = await load("xlike2.html", { profile: "x" });
+  await settle();
+  check("X 新形式: 投稿本文（article 内の div[dir=auto]）が翻訳される", (await count("article div[dir='auto'] [data-mz-en]")) > 0);
+  check("X 新形式: 名前・時刻（リンク）・ボタン・記事外は変更されない", (await text("#name")) === "首相官邸の公式アカウント名" && (await text("#tm")) === "2時間前の投稿です" && (await text("#btn")) === "返信する操作のボタン" && (await count("#trend [data-mz-en]")) === 0 && (await count("#quote [data-mz-en]")) === 0 && (await text("#qt")) === "引用された投稿の見出しの日本語です。リンクとして扱われる入れ子の枠です。");
+  check("X 新形式: 投稿全体を包む div[role=link] の中でも本文は翻訳され、リンク内の文字は触れない", (await count("[role='link'] div[dir='auto'] [data-mz-en]")) > 0 && (await html("div[dir='auto'] a")) === "#ハッシュタグ", (await count("[role='link'] div[dir='auto'] [data-mz-en]")));
+  check("X 新形式: カードが article の外側にある形でも本文は翻訳され、入れ子の引用の枠は触れない", (await count("#b2 [data-mz-en], #card2 #b2 ~ [data-mz-en], #card2 [data-mz-en]")) > 0 && (await count("#quote2 [data-mz-en]")) === 0);
+  await ev("window.__mazemaze.restoreAll()");
+  check("X 新形式: 復元で完全一致", (await ev("document.body.innerHTML")) === before);
+}
+
 // ---- 8. framework-like page -------------------------------------------------------------------
 {
   let before = await load("framework.html");
@@ -425,6 +437,34 @@ for (const mode of ["ok", "xssen"]) {
   check("分割しても全体が英語混在になる", (await count("#long [data-mz-en]")) > 20);
   await ev("window.__mazemaze.restoreAll()");
   check("長い段落も完全復元", (await ev("document.body.innerHTML")) === before);
+}
+
+
+// ---- 12. paste page ("貼り付けて翻訳"): the app's own template, filled by paste_fill.js ----------------------
+{
+  const RES = path.join(HERE, "../Mazemaze/Resources");
+  const FILL = fs.readFileSync(path.join(RES, "paste_fill.js"), "utf8");
+  const GET = fs.readFileSync(path.join(RES, "paste_text.js"), "utf8");
+  const fill = (lines) => ev(`(function(lines){${FILL}})(${JSON.stringify(lines)})`);
+  const shown = () => ev(`(function(){${GET}})()`);
+  const lines = ["今日は晴れていて、散歩に出かけるのにちょうど良い天気です。", "", "短い", "<img src=x onerror=window.__xss=1>テストの文章がここにあります。これは日本語の文章です。", " 先頭に空白のある、長めの日本語の文章です。それから続きの文です。", "🙂 絵文字を含む、日本語のとても長い文章がここに入ります。"];
+  await load("../Mazemaze/Resources/paste.html", { mode: "ok" });
+  const csp = await ev("document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content");
+  check("貼り付け画面: CSP でスクリプトを許可しない（script-src なし・default-src 'none'）", /default-src 'none'/.test(csp) && !/script-src/.test(csp) && /form-action 'none'/.test(csp) && /base-uri 'none'/.test(csp), csp);
+  check("貼り付け画面: テンプレートに script / form / input 要素がない", (await count("script, form, input, textarea, a[href]")) === 0);
+  const ok = await fill(lines);
+  const filled = await ev("document.getElementById('out').innerHTML");
+  check("貼り付け: 1 行 1 要素（空行は blank）で入る", ok === true && (await count("#out > div")) === lines.length && (await count("#out > div.blank")) === 1);
+  check("貼り付け: HTML は文字のまま表示され、実行・要素化されない", (await ev("window.__xss === undefined")) && (await count("#out img")) === 0 && (await ev("document.querySelectorAll('#out > div')[3].textContent")) === lines[3]);
+  check("貼り付け: 取り出した文字列が貼り付けた原文と完全一致（改行・先頭空白・絵文字）", (await shown()) === lines.join("\n"));
+  await settle();
+  const st = await status();
+  check("貼り付け: 既存の翻訳処理で英語混在になる", st.replaced >= 3 && (await count("#out [data-mz-en]")) >= 3, JSON.stringify(st));
+  check("貼り付け: 短い行（8 文字未満）は日本語のまま", (await ev("document.querySelectorAll('#out > div')[2].textContent")) === "短い");
+  const afterText = await shown();
+  check("貼り付け: 翻訳後の表示文字列には不可視のプレースホルダが混ざらない", !afterText.includes("​") && afterText !== lines.join("\n") && afterText.split("\n").length === lines.length);
+  await ev("window.__mazemaze.restoreAll()");
+  check("貼り付け: 原文に戻すと貼り付けた状態と完全一致（DOM・文字列）", (await ev("document.getElementById('out').innerHTML")) === filled && (await shown()) === lines.join("\n"));
 }
 
 check("ページ側に未処理の例外が出ていない", pageErrors.length === 0, pageErrors.join("|").slice(0, 300));

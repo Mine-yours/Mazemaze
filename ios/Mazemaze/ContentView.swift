@@ -12,6 +12,7 @@ struct ContentView: View {
             .id(model.activeID)
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
             .sheet(isPresented: $showTabs) { TabSwitcherView().environmentObject(model) }
+            .fullScreenCover(isPresented: $model.showPaste) { PasteTranslateView().environmentObject(model) }
             .onAppear {
                 #if DEBUG
                 // Screenshots only (simulator): open a sheet or a pairing prompt from a launch argument.
@@ -21,16 +22,44 @@ struct ContentView: View {
                 case "pairing"?: if let p = SelfTest.value("-MazemazePairGood") { model.receivePairing(p) }; return
                 default: break
                 }
+                // Stress: open the tab list while a translation is running, then pick another tab.
+                if let n = SelfTest.value("-MazemazeShowLoop").flatMap(Int.init) {
+                    Task { @MainActor in
+                        for _ in 0..<n {
+                            try? await Task.sleep(nanoseconds: 1_300_000_000); showTabs = true
+                            try? await Task.sleep(nanoseconds: 1_300_000_000); showTabs = false
+                        }
+                    }
+                }
+                if let after = SelfTest.value("-MazemazeShowAfter").flatMap(Double.init) {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: UInt64(after * 1_000_000_000)); showTabs = true
+                        if let pick = SelfTest.value("-MazemazePickAfter").flatMap(Double.init) {
+                            try? await Task.sleep(nanoseconds: UInt64(pick * 1_000_000_000))
+                            if let other = model.tabs.first(where: { $0.id != model.activeID }) { model.activate(other.id) }
+                            showTabs = false
+                        }
+                    }
+                }
                 #endif
                 if model.needsSetup { showSettings = true } else { model.warmupIfNeeded() }
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.active.recoverIfNeeded(); model.warmupIfNeeded() }
+                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
+            }
+            .onChange(of: model.pasteNonce) { _ in
+                // A full-screen cover cannot appear above an open sheet: close them first.
+                let hadSheet = showSettings || showTabs
+                showSettings = false; showTabs = false
+                Task { @MainActor in
+                    if hadSheet { try? await Task.sleep(nanoseconds: 500_000_000) }
+                    model.presentPaste()
+                }
             }
             .onChange(of: model.pairingNonce) { _ in
                 // An alert cannot appear above an open sheet: close them, let the animation finish, then ask.
-                showSettings = false; showTabs = false
+                showSettings = false; showTabs = false; if model.showPaste { model.closePaste() }
                 Task { @MainActor in
                     try? await Task.sleep(nanoseconds: 450_000_000)
                     model.pairingPromptVisible = true
@@ -163,7 +192,7 @@ struct PageScreen: View {
                 Text(b.kind == .safariRedirect ? "このサイトはアプリ内ブラウザでは開けません" : "別のアプリで開くリンクです")
                     .font(.headline).multilineTextAlignment(.center)
                 Text(b.kind == .safariRedirect
-                     ? "\(b.host) は、アプリ内ブラウザからのアクセスを Safari に誘導しています。Mazemaze はこの制限を回避しません。Safari で開くことはできますが、翻訳はされません。"
+                     ? "\(b.host) は、アプリ内ブラウザからのアクセスを Safari に誘導しています。\(BrowserIdentity.wantsSafariIdentity(host: b.host) ? "このアプリは X に Safari 互換の UA を送る設定ですが、それでも誘導されました（設定でオフにしている可能性があります）。" : "Mazemaze は、X 以外のサイトの制限は回避しません。")Safari で開くことはできますが、翻訳はされません。"
                      : "このリンク（\(b.host)）を開くと、このアプリを離れます。")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Button { model.openOutside(b.openURL); tab.dismissBlockedNavigation() } label: {
@@ -283,6 +312,7 @@ struct PageScreen: View {
                 Button { tab.goHomeScreen() } label: { Label("このタブをホームに戻す（ページは閉じます）", systemImage: "house") }
             }
             Button { model.newTab() } label: { Label("新しいタブ（ホーム画面）", systemImage: "plus.square") }
+            Button { model.openPaste() } label: { Label("貼り付けて翻訳", systemImage: "doc.on.clipboard") }
             Button { showSettings = true } label: { Label("設定", systemImage: "gearshape") }
         } label: {
             VStack(spacing: 2) {

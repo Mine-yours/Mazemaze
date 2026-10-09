@@ -40,6 +40,7 @@ public final class SettingsStore: @unchecked Sendable {
         static let pin = "mazemaze.pin"
         static let serverName = "mazemaze.serverName"
         static let restoreTabs = "mazemaze.restoreTabs"
+        static let safariIdentityForX = "mazemaze.safariIdentityForX"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
     }
@@ -84,6 +85,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Key.enabled) }
     }
     /// Reopen the tabs of the last session (only pages that are safe to store; see SessionPrivacy).
+    /// On by default (owner's decision, 2026-10-09): X is opened with a Safari-style user agent.
+    public var safariIdentityForX: Bool {
+        get { defaults.object(forKey: Key.safariIdentityForX) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
+    }
+
     public var restoreTabs: Bool {
         get { defaults.object(forKey: Key.restoreTabs) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.restoreTabs) }

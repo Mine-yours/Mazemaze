@@ -33,7 +33,9 @@
     "[data-mazemaze]", "[data-mazemaze-ui]"
   ].join(",");
   var BLOCK_SELECTOR = "p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,dd,dt,figcaption,summary,div,section,article,main,body";
-  var X_ROOTS = "[data-testid='tweetText'],[data-testid='UserDescription']";
+  // Post text: the classic markup has data-testid; the newer (logged-out) markup only has a div[dir=auto] inside the <article>.
+  // Names, handles and times are links (skipped as "a"), buttons and menus are skipped too.
+  var X_ROOTS = "[data-testid='tweetText'],[data-testid='UserDescription'],article div[dir='auto']";
   // Direct messages must never be sent for translation, even if they reuse the tweet markup.
   var X_EXCLUDE = "[data-testid='DMDrawer'],[data-testid*='DmActivity'],[data-testid*='message' i],[data-testid*='conversation' i],[aria-label*='ダイレクトメッセージ'],[aria-label*='Direct Message' i]";
 
@@ -77,6 +79,29 @@
     return parent.closest("article,main,[role='main']") || (document.querySelector("article,main,[role='main']") ? null : document.body);
   }
 
+  // The nearest element that makes text off limits (links, buttons, dialogs, ...). On X the whole post card is a
+  // div[role=link] (the card opens the post), so that one wrapper does not count when it merely contains the
+  // post text; real links (<a>), buttons, dialogs and aria-hidden regions still do.
+  // Only the outermost role=link around one <article> (the post card itself; it is either just inside the article or
+  // just outside it). A role=link nested in another one (a quoted post's card, a profile row) stays off limits.
+  function isOuterPostCard(el) {
+    var outer = el.parentElement ? el.parentElement.closest("[role='link']") : null;
+    if (outer) return false;
+    var art = el.closest("article") || el.querySelector("article");
+    return !!art && (art.contains(el) || el.contains(art));
+  }
+
+  function skippedByPage(parent) {
+    var el = parent.closest(SKIP_SELECTOR);
+    if (state.profile === "x" && el) {
+      var root = parent.closest(X_ROOTS);
+      while (el && root && el !== root && el.tagName !== "A" && el.getAttribute("role") === "link" && el.contains(root) && !root.contains(el) && isOuterPostCard(el)) {
+        el = el.parentElement ? el.parentElement.closest(SKIP_SELECTOR) : null;
+      }
+    }
+    return !!el;
+  }
+
   function isCandidateNode(node) {
     if (node.nodeType !== 3) return false;
     var value = node.nodeValue;
@@ -86,7 +111,7 @@
     if (byNode.has(node)) return false;
     var parent = node.parentElement;
     if (!parent || !node.isConnected) return false;
-    if (parent.closest(SKIP_SELECTOR)) return false;
+    if (skippedByPage(parent)) return false;
     if (parent.isContentEditable) return false;
     if (state.profile === "x" && parent.closest(X_EXCLUDE)) return false;
     if (!rootSelectorFor(node)) return false;

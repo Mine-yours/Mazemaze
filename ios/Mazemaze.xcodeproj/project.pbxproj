@@ -10,13 +10,18 @@
 		0B423DD179EF01E2E22CC668 /* TabSwitcherView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B251E714603D76D82E4DF6A /* TabSwitcherView.swift */; };
 		2B18348839A894F2471A9E94 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16FCF97F97731EF8AD6CE27F /* SettingsView.swift */; };
 		3322BEC1C8E20C588D57F90D /* Bench.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4C98DC756CC98573D4A8D7 /* Bench.swift */; };
+		37DAEFB37F6DCF1E14C6CED1 /* Resources/paste.html in Resources */ = {isa = PBXBuildFile; fileRef = 53E9C604AC6013CFC0F8EB6B /* Resources/paste.html */; };
+		4F9398A5CEFA6E0506473220 /* Resources/paste_fill.js in Resources */ = {isa = PBXBuildFile; fileRef = 696CE3428F7BB0D432046046 /* Resources/paste_fill.js */; };
 		50EFE5093E96DBC7BC3A811C /* MazemazeCore in Frameworks */ = {isa = PBXBuildFile; productRef = F24C5F60E3D7EFF68E987C74 /* MazemazeCore */; };
+		57D7FF05007A9F022689751C /* PasteTranslateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */; };
 		598ECA083E8EED53CC291A81 /* BrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14BC652CBAB00934BF0C021B /* BrowserView.swift */; };
 		6FED3F022C889CE8FF7FC638 /* Resources/translator.js in Resources */ = {isa = PBXBuildFile; fileRef = 24E300CCF8249C399A82921D /* Resources/translator.js */; };
 		73B9F094621BE07E61A3CF8C /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D155372C8AE34D1B4DAA9C /* HomeView.swift */; };
 		77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */; };
 		9E0BF8DF6A2ACE7388B73DA7 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */; };
 		AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */; };
+		B1E3D6A7B0FF22BD01EB91E2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 98D87BA38D841BBC3186FCAC /* Assets.xcassets */; };
+		B87E46209AE4D59F592BE096 /* Resources/paste_text.js in Resources */ = {isa = PBXBuildFile; fileRef = 88190A352D59D2E83E85BC42 /* Resources/paste_text.js */; };
 		B9F97151124E95139F86D795 /* TabModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 821BAE9A18D5674DAA960694 /* TabModel.swift */; };
 		CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = F529774BF11EA85B1A85540F /* SelfTest.swift */; };
 		F599865DB12219E28A1168BB /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */; };
@@ -27,10 +32,15 @@
 		16FCF97F97731EF8AD6CE27F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		24E300CCF8249C399A82921D /* Resources/translator.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/translator.js; sourceTree = "<group>"; };
 		25AEFE6C525A4559AFE2FCB0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteTranslateView.swift; sourceTree = "<group>"; };
+		53E9C604AC6013CFC0F8EB6B /* Resources/paste.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = Resources/paste.html; sourceTree = "<group>"; };
+		696CE3428F7BB0D432046046 /* Resources/paste_fill.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/paste_fill.js; sourceTree = "<group>"; };
 		821BAE9A18D5674DAA960694 /* TabModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabModel.swift; sourceTree = "<group>"; };
+		88190A352D59D2E83E85BC42 /* Resources/paste_text.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = Resources/paste_text.js; sourceTree = "<group>"; };
 		8B251E714603D76D82E4DF6A /* TabSwitcherView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabSwitcherView.swift; sourceTree = "<group>"; };
 		8B4C98DC756CC98573D4A8D7 /* Bench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Bench.swift; sourceTree = "<group>"; };
 		900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSecretStore.swift; sourceTree = "<group>"; };
+		98D87BA38D841BBC3186FCAC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		996AD237BC284D463E664FFE /* Mazemaze.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mazemaze.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MazemazeApp.swift; sourceTree = "<group>"; };
 		B2D94CCFC58DA9425CE6BEE0 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -69,12 +79,17 @@
 				C4D155372C8AE34D1B4DAA9C /* HomeView.swift */,
 				900D6632D0359A1FCE784041 /* KeychainSecretStore.swift */,
 				A12F0B40B61016EC35BD0DC2 /* MazemazeApp.swift */,
+				368F8F7517825A35ADC7EDD9 /* PasteTranslateView.swift */,
 				F529774BF11EA85B1A85540F /* SelfTest.swift */,
 				16FCF97F97731EF8AD6CE27F /* SettingsView.swift */,
 				821BAE9A18D5674DAA960694 /* TabModel.swift */,
 				8B251E714603D76D82E4DF6A /* TabSwitcherView.swift */,
+				53E9C604AC6013CFC0F8EB6B /* Resources/paste.html */,
+				696CE3428F7BB0D432046046 /* Resources/paste_fill.js */,
+				88190A352D59D2E83E85BC42 /* Resources/paste_text.js */,
 				24E300CCF8249C399A82921D /* Resources/translator.js */,
 				D66ADE64E49AA35420BAEC8B /* Info.plist */,
+				98D87BA38D841BBC3186FCAC /* Assets.xcassets */,
 			);
 			path = Mazemaze;
 			sourceTree = "<group>";
@@ -152,6 +167,10 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B1E3D6A7B0FF22BD01EB91E2 /* Assets.xcassets in Resources */,
+				37DAEFB37F6DCF1E14C6CED1 /* Resources/paste.html in Resources */,
+				4F9398A5CEFA6E0506473220 /* Resources/paste_fill.js in Resources */,
+				B87E46209AE4D59F592BE096 /* Resources/paste_text.js in Resources */,
 				6FED3F022C889CE8FF7FC638 /* Resources/translator.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -170,6 +189,7 @@
 				73B9F094621BE07E61A3CF8C /* HomeView.swift in Sources */,
 				AACFE69B9663655CF2E70100 /* KeychainSecretStore.swift in Sources */,
 				77B83204CE641EA06AE602DA /* MazemazeApp.swift in Sources */,
+				57D7FF05007A9F022689751C /* PasteTranslateView.swift in Sources */,
 				CE558F252D46E0B088A06DC7 /* SelfTest.swift in Sources */,
 				2B18348839A894F2471A9E94 /* SettingsView.swift in Sources */,
 				B9F97151124E95139F86D795 /* TabModel.swift in Sources */,
@@ -203,6 +223,7 @@
 		CCCAD83F788AAFA187A48A3F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -247,6 +268,7 @@
 		E3B8F5EFBFC1CE01003F9888 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

@@ -5,7 +5,7 @@ public enum ExternalNavigation: Equatable, Sendable {
     /// Ordinary web page (or about:blank): load it here.
     case allowInApp
     /// The site bounced us to "x-safari-https://…": it refuses in-app browsers and wants Safari.
-    /// Carries the https URL it asked for. We do not work around this (no User-Agent changes).
+    /// Carries the https URL it asked for. Only X gets the Safari-style identity (see BrowserIdentity); for anything else we do not work around this.
     case safariRedirect(URL)
     /// A phone / mail / SMS / maps link. Only opened after the user taps the prompt.
     case external(URL)
@@ -16,7 +16,8 @@ public enum ExternalNavigation: Equatable, Sendable {
         guard let scheme = url.scheme?.lowercased() else { return .blocked }
         switch scheme {
         case "http", "https":
-            return .allowInApp
+            // The app's private paste page is never reachable from a web page or the address bar.
+            return PasteSurface.touchesPasteHost(url) ? .blocked : .allowInApp
         case "about":
             return url.absoluteString == "about:blank" ? .allowInApp : .blocked
         case "x-safari-https", "x-safari-http":

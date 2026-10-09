@@ -42,6 +42,8 @@ public struct SitePolicy: Equatable {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if s.hasSuffix(".") { s.removeLast() }
         guard !s.isEmpty, s.count <= 253, s.contains("."), !publicSuffixLike.contains(s) else { return nil }
+        // Names that are reserved / never public (RFC 6761 etc.) are not sites.
+        guard !["invalid", "test", "example", "localhost", "local"].contains(where: { s == $0 || s.hasSuffix("." + $0) }) else { return nil }
         let labels = s.split(separator: ".", omittingEmptySubsequences: false)
         guard labels.allSatisfy({ l in
             !l.isEmpty && l.count <= 63 && !l.hasPrefix("-") && !l.hasSuffix("-") &&
@@ -55,6 +57,9 @@ public struct SitePolicy: Equatable {
     }
 
     public func decision(for url: URL?) -> SiteDecision {
+        // The app's own paste page is decided before anything else (exact match only); the rest of that host never is.
+        if PasteSurface.isPasteURL(url) { return .allowed(profile: .generic) }
+        if PasteSurface.touchesPasteHost(url) { return .denied("対象外のホストです") }
         guard let url, let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return .denied("URL がありません") }
         guard let scheme = comps.scheme?.lowercased() else { return .denied("スキームがありません") }
         if comps.user != nil || comps.password != nil { return .denied("認証情報付きの URL です") }

@@ -59,4 +59,13 @@ if python3 -c "import re,sys; sys.exit(0 if re.search(r'[\u3040-\u30ff\u3400-\u9
 # The server with the wrong certificate must never have received an HTTP request (the app refused it first).
 if grep -q -E "HTTP/1.1\"" "$TLSLOG_B"; then echo "FAIL: a request reached the server with the wrong certificate"; exit 1; else echo "OK: nothing reached the server presenting a different certificate"; fi
 if grep -q -E "(X-Mazemaze|$TOKEN)" "$TLSLOG_A" "$TLSLOG_B"; then echo "FAIL: the token appears in a server log"; exit 1; fi
-if grep -q "SELFTEST DONE passed=.* failed=0" "$LOG"; then echo "RESULT: PASS"; else echo "RESULT: FAIL"; exit 1; fi
+if ! grep -q "SELFTEST DONE passed=.* failed=0" "$LOG"; then echo "RESULT: FAIL"; exit 1; fi
+# Regression: the tab list with "休止中"/"翻訳中" badges must open and close repeatedly without crashing
+# (a badge() call once resolved to SwiftUI's View.badge and made the card contain itself forever).
+xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
+xcrun simctl launch "$DEVICE" "$BUNDLE_ID" -MazemazeAPI http://127.0.0.1:9 -MazemazeToken dummy-token-0123456789 -MazemazeDemoTabs 3 -MazemazeShowLoop 6 >/dev/null
+sleep 20
+RUNNING="$(xcrun simctl spawn "$DEVICE" launchctl list 2>/dev/null || true)"
+if grep -q "$BUNDLE_ID" <<<"$RUNNING"; then echo "OK: the tab list opened and closed 6 times without a crash"; else echo "FAIL: the app crashed while the tab list was shown"; exit 1; fi
+xcrun simctl terminate "$DEVICE" "$BUNDLE_ID" 2>/dev/null || true
+echo "RESULT: PASS"

@@ -46,6 +46,8 @@ ID_PKG_REF = oid("pkgref.core")
 ID_PKG_DEP = oid("pkgdep.core")
 ID_PKG_BUILD = oid("pkgbuild.core")
 ID_PLIST = oid("file.Info.plist")
+ID_ASSETS = oid("file.Assets.xcassets")
+ID_ASSETS_BUILD = oid("build.Assets.xcassets")
 ID_CFG_PROJ_LIST = oid("cfglist.project")
 ID_CFG_TARGET_LIST = oid("cfglist.target")
 ID_CFG = {n: oid(f"cfg.{n}") for n in ("proj.Debug", "proj.Release", "tgt.Debug", "tgt.Release")}
@@ -54,6 +56,7 @@ out: list[str] = ["// !$*UTF8*$!", "{", "\tarchiveVersion = 1;", "\tclasses = {"
 
 # PBXBuildFile
 out.append("/* Begin PBXBuildFile section */")
+out.append(f"\t\t{ID_ASSETS_BUILD} /* Assets.xcassets in Resources */ = {{isa = PBXBuildFile; fileRef = {ID_ASSETS} /* Assets.xcassets */; }};")
 for f in swift_files:
     out.append(f"\t\t{oid('build.' + str(f))} /* {f.name} in Sources */ = {{isa = PBXBuildFile; fileRef = {oid('file.' + str(f))} /* {f.name} */; }};")
 for f in resource_files:
@@ -65,6 +68,7 @@ out.append("/* End PBXBuildFile section */\n")
 out.append("/* Begin PBXFileReference section */")
 out.append(f"\t\t{ID_APP_PRODUCT} /* Mazemaze.app */ = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mazemaze.app; sourceTree = BUILT_PRODUCTS_DIR; }};")
 out.append(f"\t\t{ID_PLIST} /* Info.plist */ = {{isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = \"<group>\"; }};")
+out.append(f"\t\t{ID_ASSETS} /* Assets.xcassets */ = {{isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = \"<group>\"; }};")
 for f in swift_files:
     out.append(f"\t\t{oid('file.' + str(f))} /* {f.name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = \"{f}\"; sourceTree = \"<group>\"; }};")
 for f in resource_files:
@@ -83,7 +87,7 @@ out.append("/* Begin PBXGroup section */")
 out.append(f"\t\t{ID_MAIN_GROUP} = {{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t{ID_APP_GROUP} /* Mazemaze */,\n\t\t\t\t{ID_PRODUCTS_GROUP} /* Products */,\n\t\t\t);\n\t\t\tsourceTree = \"<group>\";\n\t\t}};")
 children = "".join(f"\t\t\t\t{oid('file.' + str(f))} /* {f.name} */,\n" for f in swift_files)
 children += "".join(f"\t\t\t\t{oid('file.res.' + str(f))} /* {f.name} */,\n" for f in resource_files)
-children += f"\t\t\t\t{ID_PLIST} /* Info.plist */,\n"
+children += f"\t\t\t\t{ID_PLIST} /* Info.plist */,\n\t\t\t\t{ID_ASSETS} /* Assets.xcassets */,\n"
 out.append(f"\t\t{ID_APP_GROUP} /* Mazemaze */ = {{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n{children}\t\t\t);\n\t\t\tpath = Mazemaze;\n\t\t\tsourceTree = \"<group>\";\n\t\t}};")
 out.append(f"\t\t{ID_PRODUCTS_GROUP} /* Products */ = {{\n\t\t\tisa = PBXGroup;\n\t\t\tchildren = (\n\t\t\t\t{ID_APP_PRODUCT} /* Mazemaze.app */,\n\t\t\t);\n\t\t\tname = Products;\n\t\t\tsourceTree = \"<group>\";\n\t\t}};")
 out.append("/* End PBXGroup section */\n")
@@ -149,7 +153,7 @@ out.append(f"""\t\t{ID_PROJECT} /* Project object */ = {{
 out.append("/* End PBXProject section */\n")
 
 # PBXResourcesBuildPhase
-res_files = "".join(f"\t\t\t\t{oid('build.res.' + str(f))} /* {f.name} in Resources */,\n" for f in resource_files)
+res_files = f"\t\t\t\t{ID_ASSETS_BUILD} /* Assets.xcassets in Resources */,\n" + "".join(f"\t\t\t\t{oid('build.res.' + str(f))} /* {f.name} in Resources */,\n" for f in resource_files)
 out.append("/* Begin PBXResourcesBuildPhase section */")
 out.append(f"\t\t{ID_RES_PHASE} /* Resources */ = {{\n\t\t\tisa = PBXResourcesBuildPhase;\n\t\t\tbuildActionMask = 2147483647;\n\t\t\tfiles = (\n{res_files}\t\t\t);\n\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t}};")
 out.append("/* End PBXResourcesBuildPhase section */\n")
@@ -178,6 +182,7 @@ proj_cfg = {
                 "SWIFT_COMPILATION_MODE": "wholemodule", "VALIDATE_PRODUCT": "YES"},
 }
 tgt_cfg = {
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     "ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS": "NO",
     "CODE_SIGN_STYLE": "Automatic",
     "CURRENT_PROJECT_VERSION": "1",

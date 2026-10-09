@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var loadedURL = ""          // what the fields showed when the sheet opened: only a real edit counts as a change
     @State private var loadedToken = ""
     @State private var confirmClear = false
+    @State private var xIdentity = true
 
     var body: some View {
         NavigationStack {
@@ -110,8 +111,10 @@ struct SettingsView: View {
                     }
                     if let e = hostError { Text(e).font(.footnote).foregroundStyle(.red) }
                     Button("初期設定に戻す") { model.setAllowedHosts(SitePolicy.defaultAllowedHosts) }
+                    Toggle("X を Safari として開く", isOn: $xIdentity)
+                        .onChange(of: xIdentity) { v in model.settings.safariIdentityForX = v; model.settings.flush() }
                 } header: { Text("翻訳するサイト") } footer: {
-                    Text("ここに登録したサイト（https のみ）だけ、本文を Mac に送って翻訳します。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。")
+                    Text("ここに登録したサイト（https のみ）だけ、本文を Mac に送って翻訳します。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。\n「X を Safari として開く」: X は、アプリ内ブラウザを Safari に誘導します。オンの間は、x.com / twitter.com に限り、Safari と同じ形式の UA を送り、Safari が持つ 2 つの目印（SchemaDataExtractor / MicrodataExtractor）を空の値で用意します。他のサイトには何もしません。オフにすると X は Safari へ誘導されます。変更は新しいタブから有効です。")
                 }
 
                 Section {
@@ -139,6 +142,7 @@ struct SettingsView: View {
                 token = model.settings.token ?? ""
                 loadedURL = serverURL; loadedToken = token
                 ratioDraft = model.ratio
+                xIdentity = model.settings.safariIdentityForX
             }
             .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft }; save() }
         }

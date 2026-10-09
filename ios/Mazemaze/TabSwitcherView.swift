@@ -32,7 +32,10 @@ struct TabSwitcherView: View {
     }
 }
 
-private func badge(_ text: String) -> some View {
+/// Named "statusBadge" on purpose: inside a View, a plain `badge(_:)` call resolves to SwiftUI's own
+/// View.badge modifier (on self) and made TabCard contain itself forever (stack overflow when a tab
+/// showed "翻訳中").
+private func statusBadge(_ text: String) -> some View {
     Text(text).font(.caption2).padding(.horizontal, 5).background(Color(.tertiarySystemFill), in: Capsule())
 }
 
@@ -48,10 +51,10 @@ private struct TabCard: View {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 4) {
                         Image(systemName: tab.showsHome ? "house" : "globe").foregroundStyle(.secondary)
-                        if tab.isSleeping { badge("休止中") }
-                        else if tab.inflight > 0 { badge("翻訳中") }
-                        else if tab.lastProblem != nil { badge("エラー") }
-                        else if tab.suspendedForPage { badge("原文表示") }
+                        if tab.isSleeping { statusBadge("休止中") }
+                        else if tab.inflight > 0 { statusBadge("翻訳中") }
+                        else if tab.lastProblem != nil { statusBadge("エラー") }
+                        else if tab.suspendedForPage { statusBadge("原文表示") }
                     }
                     Text(tab.displayTitle).font(.subheadline).bold().lineLimit(3).multilineTextAlignment(.leading)
                     Text(tab.displayHost).font(.caption).foregroundStyle(.secondary).lineLimit(1)

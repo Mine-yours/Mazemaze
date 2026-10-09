@@ -25,6 +25,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var tabs: [TabModel] = []
     @Published private(set) var activeID = 0
     @Published var tabNotice: String?
+    // "貼り付けて翻訳": a session that is not in `tabs` (so it is never listed, saved, restored or put to sleep)
+    @Published var showPaste = false
+    @Published var pasteNonce = 0
+    @Published private(set) var pasteTab: TabModel?
     private var nextTabID = 1
     private var persistTask: Task<Void, Never>?
 
@@ -131,6 +135,43 @@ final class AppModel: ObservableObject {
     }
     #endif
 
+    // MARK: paste and translate
+    /// Ask for the paste screen. The screen (ContentView) closes any open sheet first, then calls `presentPaste()`.
+    func openPaste() { pasteNonce += 1 }
+
+    func presentPaste() {
+        guard !showPaste else { return }
+        active.pauseInPage?()          // only once the screen is really shown
+        showPaste = true
+        warmupIfNeeded()
+    }
+
+    /// Show the translated page for these lines (a new page, a new generation, every time).
+    func startPaste(lines: [String]) {
+        endPasteResult(restoreScope: false)
+        defer { nextTabID += 1 }
+        let t = TabModel(id: nextTabID, app: self, kind: .paste, pasteLines: lines)
+        pasteTab = t
+        Task { [service, id = t.id] in await service.setActiveScope(id) }
+    }
+
+    /// Drop the result page (back to the input screen): its requests are forgotten and its text is gone.
+    func endPasteResult(restoreScope: Bool = true) {
+        guard let t = pasteTab else { return }
+        pasteTab = nil
+        t.close()
+        Task { [service, id = t.id, activeID] in
+            await service.removeScope(id)
+            if restoreScope { await service.setActiveScope(activeID) }
+        }
+    }
+
+    func closePaste() {
+        endPasteResult()
+        showPaste = false
+        active.resumeInPage?()
+    }
+
     // MARK: tabs
     private func makeTab(url: URL? = nil, title: String? = nil) -> TabModel {
         defer { nextTabID += 1 }
@@ -228,6 +269,7 @@ final class AppModel: ObservableObject {
         Task {
             await service.configurationChanged()
             for t in tabs { t.pushConfigToPage?() }
+            pasteTab?.pushConfigToPage?()
         }
     }
 

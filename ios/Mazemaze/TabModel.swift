@@ -17,7 +17,13 @@ enum ProblemAction: Equatable { case openSettings, reload }
 /// translation service are shared through `AppModel`.
 @MainActor
 final class TabModel: ObservableObject, Identifiable {
+    /// `.web`: an ordinary browser tab. `.paste`: the "貼り付けて翻訳" result page: not in the tab list, never
+    /// saved or restored, its text lives only in memory.
+    enum Kind { case web, paste }
+
     let id: Int
+    let kind: Kind
+    let pasteLines: [String]
     unowned let app: AppModel
 
     // What the screen shows
@@ -54,8 +60,8 @@ final class TabModel: ObservableObject, Identifiable {
     var reload: (() -> Void)?
     var stopLoading: (() -> Void)?
 
-    init(id: Int, app: AppModel, url: URL? = nil, title: String? = nil) {
-        self.id = id; self.app = app
+    init(id: Int, app: AppModel, url: URL? = nil, title: String? = nil, kind: Kind = .web, pasteLines: [String] = []) {
+        self.id = id; self.app = app; self.kind = kind; self.pasteLines = pasteLines
         restoreURL = url; restoredTitle = title
         if let url { addressText = url.absoluteString; currentURL = url }
     }

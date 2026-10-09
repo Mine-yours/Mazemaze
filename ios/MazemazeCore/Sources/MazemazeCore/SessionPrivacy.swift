@@ -17,7 +17,7 @@ public enum SessionPrivacy {
         "messages", "dm", "login", "logout", "signin", "signup", "oauth", "oauth2", "auth", "sso", "token",
         "settings", "profile", "wallet", "bank",
     ]
-    static let privateHostSuffixes = [".local", ".internal", ".lan", ".home", ".corp", ".localdomain", ".intranet", ".private"]
+    static let privateHostSuffixes = [".local", ".internal", ".lan", ".home", ".corp", ".localdomain", ".intranet", ".private", ".invalid", ".test", ".example", ".localhost"]
 
     /// The URL to store (https, host and path only), or nil if this page must not be stored.
     public static func persistableURL(_ url: URL?) -> URL? {

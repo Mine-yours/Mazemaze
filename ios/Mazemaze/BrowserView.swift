@@ -27,29 +27,36 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     private var lastUserRequestedURL: URL?     // what the user typed or tapped; used for "open in Safari"
     private var lastIntentionalCancel = Date.distantPast
     private var hintTask: Task<Void, Never>?
+    private var pasteNavigationUsed = false     // the paste page may load once (the app's own template) and never navigate again
 
     init(tab: TabModel, app: AppModel) { self.tab = tab; self.app = app }
 
     func makeWebView(initialURL: URL?) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
-        config.websiteDataStore = .default()
+        // The paste page uses a throw-away data store: nothing about it is kept on disk.
+        config.websiteDataStore = tab.kind == .paste ? .nonPersistent() : .default()
         let ucc = config.userContentController
         ucc.addScriptMessageHandler(self, contentWorld: Self.world, name: "mazemaze")
         if let url = Bundle.main.url(forResource: "translator", withExtension: "js"),
            let source = try? String(contentsOf: url, encoding: .utf8) {
             ucc.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: Self.world))
         }
+        // X only (owner's decision of 2026-10-09, see BrowserIdentity): the page script itself checks the host.
+        if app.settings.safariIdentityForX {
+            ucc.addUserScript(WKUserScript(source: BrowserIdentity.xPageScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page))
+        }
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
         web.uiDelegate = self
-        web.allowsBackForwardNavigationGestures = true
+        web.allowsBackForwardNavigationGestures = tab.kind == .web
         #if DEBUG
         web.isInspectable = true
         #endif
         webView = web
         observe(web)
         bindModel(web)
+        if tab.kind == .paste { loadPasteTemplate(web); return web }
         #if DEBUG
         // The self-test and the benchmark drive the first web view only; later tabs are ordinary.
         if SelfTest.isActive, !SelfTest.hasStarted { SelfTest.hasStarted = true; SelfTest.start(web: web, coordinator: self, app: app); return web }
@@ -112,9 +119,13 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     // MARK: URL changes (including single-page-app route changes that never "navigate")
     /// The URL of the document that is really on screen. `webView.url` also reports the target of a
     /// load that is still in progress (and may be cancelled), the back-forward list does not.
-    private func committedURL(_ web: WKWebView) -> URL? { web.backForwardList.currentItem?.url ?? web.url }
+    private func committedURL(_ web: WKWebView) -> URL? {
+        if tab.kind == .paste { return PasteSurface.isPasteURL(web.url) ? web.url : nil }
+        return web.backForwardList.currentItem?.url ?? web.url
+    }
 
     private func urlChanged(_ web: WKWebView) {
+        guard tab.kind == .web else { return }          // the paste page has no address bar, history or saved state
         if let url = web.url { tab.addressText = url.absoluteString }
         let committed = committedURL(web)
         tab.currentURL = committed
@@ -176,8 +187,14 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
 
     // MARK: navigation
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url else { return .cancel }
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        if tab.kind == .paste {
+            // Only the app's own template load is allowed (the first main-frame navigation); no link, script or
+            // redirect can take this page anywhere else.
+            if isMainFrame, !pasteNavigationUsed { pasteNavigationUsed = true; return .allow }
+            return .cancel
+        }
+        guard let url = navigationAction.request.url else { return .cancel }
         switch ExternalNavigation.classify(url) {
         case .blocked:
             // Embedded widgets (iframes) may use about:/blob:/data:; only the top level is restricted.
@@ -186,7 +203,7 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             return .cancel
         case .safariRedirect(let httpsURL):
             // The site refuses in-app browsers and sends us to Safari. We do not work around that
-            // (no User-Agent changes); show an explanation instead of a blank page.
+            // (no workarounds beyond the X-only identity, see BrowserIdentity); show an explanation instead of a blank page.
             lastIntentionalCancel = Date()
             guard isMainFrame else { return .cancel }
             var asked = lastUserRequestedURL ?? lastMainFrameRequest ?? httpsURL
@@ -203,6 +220,8 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             }
             return .cancel
         case .allowInApp:
+            // Only a navigation of THIS web view's main frame (not target=_blank, which opens a new tab) may change its identity.
+            if navigationAction.targetFrame?.isMainFrame == true { await applyIdentity(for: url, on: webView) }
             if navigationAction.targetFrame == nil {
                 // target=_blank: open it in a new tab, but only for a real tap (no script-opened popups).
                 if navigationAction.navigationType == .linkActivated { app.newTab(url: url) }
@@ -214,6 +233,22 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             }
             return .allow
         }
+    }
+
+    // MARK: browser identity (X only, owner's decision of 2026-10-09; see BrowserIdentity)
+    private static var defaultUserAgent: String?
+
+    /// X sends a bare WKWebView ("…Mobile/15E148", no Safari tokens) to Safari. For X hosts only, add Safari's
+    /// standard tokens; every other site keeps the web view's own user agent.
+    private func applyIdentity(for url: URL, on web: WKWebView) async {
+        guard BrowserIdentity.wantsSafariIdentity(host: url.host), app.settings.safariIdentityForX else {
+            if web.customUserAgent != nil { web.customUserAgent = nil }
+            return
+        }
+        if Self.defaultUserAgent == nil, let ua = try? await web.evaluateJavaScript("navigator.userAgent", in: nil, contentWorld: Self.world) as? String { Self.defaultUserAgent = ua }
+        guard let base = Self.defaultUserAgent else { return }
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        web.customUserAgent = BrowserIdentity.safariStyle(from: base, osMajor: os.majorVersion, osMinor: os.minorVersion)
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -247,8 +282,40 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if tab.kind == .paste { fillPaste(); return }
         app.recordVisit(of: tab)
         scheduleNothingToTranslateHint()
+    }
+
+    // MARK: the paste page ("貼り付けて翻訳")
+    private static let pasteFillScript = (Bundle.main.url(forResource: "paste_fill", withExtension: "js")).flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    private static let pasteTextScript = (Bundle.main.url(forResource: "paste_text", withExtension: "js")).flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+
+    /// The app's own page: fixed template, no script of its own, address that can never be reached on the network.
+    private func loadPasteTemplate(_ web: WKWebView) {
+        guard let url = Bundle.main.url(forResource: "paste", withExtension: "html"),
+              let html = try? String(contentsOf: url, encoding: .utf8) else {
+            tab.lastProblem = "貼り付け画面を読み込めません（アプリの再インストールが必要かもしれません）"
+            return
+        }
+        pasteNavigationUsed = false
+        web.loadHTMLString(html, baseURL: PasteSurface.url)
+    }
+
+    /// Put the pasted lines on the page (as arguments, never spliced into code; textContent only).
+    private func fillPaste() {
+        guard let web = webView, let script = Self.pasteFillScript else { return }
+        web.callAsyncJavaScript(script, arguments: ["lines": tab.pasteLines], in: nil, in: Self.world) { _ in }
+    }
+
+    /// What the paste page shows now, as plain text (for "コピー").
+    func pasteText() async -> String? {
+        guard let web = webView, let script = Self.pasteTextScript else { return nil }
+        return await withCheckedContinuation { cont in
+            web.callAsyncJavaScript(script, arguments: [:], in: nil, in: Self.world) { result in
+                if case .success(let v) = result, let s = v as? String { cont.resume(returning: s) } else { cont.resume(returning: nil) }
+            }
+        }
     }
 
     /// If, a few seconds after the page loaded, nothing was found to translate (a list of links,
@@ -297,6 +364,11 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
 
     private var lastCrashReload = Date.distantPast
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        if tab.kind == .paste {      // the text is in memory: start the page again instead of reloading a page that is gone
+            if Date().timeIntervalSince(lastCrashReload) > 15 { lastCrashReload = Date(); loadPasteTemplate(webView) }
+            else { tab.lastProblem = "貼り付け画面が異常終了しました。一度閉じて、もう一度開いてください" }
+            return
+        }
         // Reload once; a page that keeps crashing must not put the app in a reload loop.
         guard Date().timeIntervalSince(lastCrashReload) > 15 else {
             tab.lastProblem = "このページは表示中に異常終了しました"

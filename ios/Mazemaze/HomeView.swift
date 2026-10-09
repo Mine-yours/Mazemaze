@@ -16,6 +16,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header
                 connectionCard
+                pasteCard
                 favoritesSection
                 recentsSection
                 privacyNote
@@ -77,6 +78,26 @@ struct HomeView: View {
     private var connectionDetail: String {
         if model.needsSetup { return "Mac で ./scripts/run_lan.sh を実行し、表示された QR を iPhone の「カメラ」で読み取ってください（初回だけ）。読み取れないときは、設定から文字列を貼り付けられます。" }
         return model.connection?.message ?? "しばらくお待ちください。"
+    }
+
+    // MARK: paste and translate
+    private var pasteCard: some View {
+        Button { model.openPaste() } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.on.clipboard").font(.title2).foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("貼り付けて翻訳").font(.headline)
+                    Text("コピーした日本語の文章（X の投稿、記事の一部など）を英語混じりにします。").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .frame(minHeight: 56)
+            .padding(14)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("コピーした文章を貼り付ける画面を開きます")
     }
 
     // MARK: favorites
