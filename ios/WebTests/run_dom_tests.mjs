@@ -353,6 +353,65 @@ for (const mode of ["ok", "xssen"]) {
   check("同じ世代で configure を重ねても、その後の翻訳が止まらない", (await count("#later [data-mz-en]")) > 0 || (await count("#later [data-mazemaze]")) > 0);
 }
 
+// ---- 8d. partial reflection, priority, pause ----------------------------------------------------
+{
+  await load("dynamic.html", { inject: false, delay: 600 });
+  const longText = Array.from({ length: 12 }, (_, i) => `これは長い段落の${["一","二","三","四","五","六","七","八","九","十","十一","十二"][i]}番目の文で、翻訳されます。`).join("");
+  await ev(`(function(){var p=document.createElement('p');p.id='part';p.textContent=${JSON.stringify(longText)};document.getElementById('feed').appendChild(p);0})()`);
+  const before = await ev("document.body.innerHTML");
+  await ev(SCRIPT + ";0");
+  // wait for the first part only
+  let seen = false;
+  for (let i = 0; i < 80 && !seen; i++) { await sleep(100); seen = (await count("#part [data-mz-en]")) > 0; }
+  const parts = await count("#part [data-mz-part]");
+  const enNow = await count("#part [data-mz-en]");
+  const reqsNow = await translates();
+  check("長い段落は、最初の部分が訳せた時点ですぐ反映される（残りは日本語のまま続く）", seen && parts >= 2 && (await text("#part")).includes("これは長い段落の"), `parts=${parts} en=${enNow} requests=${reqsNow}`);
+  await ev("window.__mazemaze.restoreAll()");   // while later parts are still in flight
+  await sleep(2500);
+  check("途中で原文に戻しても完全復元され、遅れて届く応答で再び変わらない", (await ev("document.body.innerHTML")) === before);
+}
+{
+  await load("scroll.html", { delay: 300 });
+  await sleep(1500);
+  const firstTexts = await ev("window.__mock.log.filter(function(m){return m.type==='translate'}).slice(0,3).map(function(m){return m.text.slice(0,8)})");
+  check("最初は画面内の段落（上から）を先に送る", firstTexts.length >= 1 && firstTexts[0].startsWith("第0番"), JSON.stringify(firstTexts));
+  const sentBeforeScroll = await translates();
+  await ev("document.getElementById('q30').scrollIntoView(); 0");
+  await sleep(2500);
+  const afterTexts = await ev("window.__mock.log.filter(function(m){return m.type==='translate'}).slice(" + sentBeforeScroll + ").map(function(m){return m.text.slice(0,8)})");
+  check("スクロールで移動したら、新しく見える段落を先に送る（古い位置の続きより優先）", afterTexts.length >= 1 && afterTexts.slice(0, 2).some((t) => /第(29|30|31|32)番/.test(t)), JSON.stringify(afterTexts.slice(0, 4)));
+}
+{
+  await load("dynamic.html");
+  await settle();
+  await ev("window.__mazemaze.pause(); addPost('一時停止中に追加された日本語の段落です。まだ翻訳されません。', 'paused1'); 0");
+  const n = await translates();
+  await sleep(2000);
+  check("一時停止中は新しい要求を送らない（表示済みの訳はそのまま）", (await translates()) === n && (await count("#paused1 [data-mazemaze]")) === 0 && (await count("#first [data-mazemaze]")) > 0);
+  await ev("window.__mazemaze.resume(); 0");
+  await settle(2000, 30000);
+  check("再開すると、停止中に増えた分も翻訳する", (await count("#paused1 [data-mazemaze]")) > 0);
+}
+
+// ---- 8e. short first node, wrapper removed by the page ------------------------------------------
+{
+  await load("shortfirst.html");
+  await settle(2500, 40000);
+  check("先頭が短いノードでも、続く長い本文は翻訳される", (await count("#sf [data-mz-en]")) > 0, JSON.stringify(await status()));
+  await ev("window.__mazemaze.restoreAll(); 0");
+}
+{
+  await load("dynamic.html");
+  await settle();
+  const had = await count("#first [data-mz-en]");
+  await ev("document.querySelector('#first [data-mazemaze]').remove(); 0");        // the page throws our wrapper away
+  await sleep(3000);
+  const text1 = await text("#first");
+  await settle(2500, 40000);
+  check("ページが wrapper だけ取り除いても、日本語が失われず、翻訳し直される", had > 0 && text1.includes("日本語の文章がここにあります") && (await count("#first [data-mz-en]")) > 0, `had=${had} text=${JSON.stringify(text1.slice(0, 30))} after=${await count("#first [data-mz-en]")} st=${JSON.stringify(await status())}`);
+}
+
 // ---- 9. oversize paragraph --------------------------------------------------------------------
 {
   await load("dynamic.html", { inject: false });
@@ -362,7 +421,7 @@ for (const mode of ["ok", "xssen"]) {
   await ev(SCRIPT + ";0");
   await settle(2500, 60000);
   const sizes = await ev("window.__mock.log.filter(function(m){return m.type==='translate'}).map(function(m){return Array.from(m.text).length})");
-  check("長い段落は 600 文字以内に分割して送る", sizes.length >= 3 && sizes.every((n) => n <= 600), JSON.stringify(sizes));
+  check("長い段落は 160 文字前後（1 文が長くても 320 以内）に分割して送る", sizes.length >= 10 && sizes.every((n) => n <= 320) && sizes.filter((n) => n <= 160).length >= sizes.length - 1, JSON.stringify(sizes.slice(0, 8)));
   check("分割しても全体が英語混在になる", (await count("#long [data-mz-en]")) > 20);
   await ev("window.__mazemaze.restoreAll()");
   check("長い段落も完全復元", (await ev("document.body.innerHTML")) === before);

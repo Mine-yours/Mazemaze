@@ -5,27 +5,32 @@ import MazemazeCore
 /// WKWebView wrapper. The translation script and its message handler live in a private
 /// WKContentWorld, so scripts of the visited site can neither see nor call them. All network
 /// access (and the token) stays on the Swift side.
+/// Shows the web view that belongs to a tab. The web view lives in the tab (not in this view), so
+/// switching tabs never reloads a page.
 struct BrowserView: UIViewRepresentable {
-    @ObservedObject var model: AppModel
+    let tab: TabModel
 
-    func makeCoordinator() -> BrowserCoordinator { BrowserCoordinator(model: model) }
-    func makeUIView(context: Context) -> WKWebView { context.coordinator.makeWebView() }
+    func makeUIView(context: Context) -> WKWebView { tab.ensureWebView() }
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 @MainActor
 final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply {
     static let world = WKContentWorld.world(name: "MazemazeWorld")
-    static let homepage = URL(string: "https://news.yahoo.co.jp/")!
 
-    let model: AppModel
+    unowned let tab: TabModel
+    unowned let app: AppModel
     private(set) weak var webView: WKWebView?
     private var observers: [NSKeyValueObservation] = []
     private var lastURL: URL?
+    private var lastMainFrameRequest: URL?     // the latest main-frame request seen (redirect hops update it)
+    private var lastUserRequestedURL: URL?     // what the user typed or tapped; used for "open in Safari"
+    private var lastIntentionalCancel = Date.distantPast
+    private var hintTask: Task<Void, Never>?
 
-    init(model: AppModel) { self.model = model }
+    init(tab: TabModel, app: AppModel) { self.tab = tab; self.app = app }
 
-    func makeWebView() -> WKWebView {
+    func makeWebView(initialURL: URL?) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.websiteDataStore = .default()
@@ -46,13 +51,33 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         observe(web)
         bindModel(web)
         #if DEBUG
-        if SelfTest.isActive { SelfTest.start(web: web, coordinator: self, model: model); return web }
+        // The self-test and the benchmark drive the first web view only; later tabs are ordinary.
+        if SelfTest.isActive, !SelfTest.hasStarted { SelfTest.hasStarted = true; SelfTest.start(web: web, coordinator: self, app: app); return web }
+        if Bench.isActive, !Bench.hasStarted {
+            Bench.hasStarted = true
+            if let u = initialURL { web.load(URLRequest(url: u)) }
+            Bench.start(web: web, app: app)
+            return web
+        }
         #endif
-        #if DEBUG
-        if let u = SelfTest.value("-MazemazeInitialURL").flatMap(URL.init(string:)) { web.load(URLRequest(url: u)); return web }
-        #endif
-        web.load(URLRequest(url: Self.homepage))
+        if let initialURL {
+            lastUserRequestedURL = initialURL
+            web.load(URLRequest(url: initialURL))
+        }
         return web
+    }
+
+    /// Release everything the web view holds on to (the script handler keeps the coordinator alive).
+    func teardown() {
+        hintTask?.cancel()
+        observers = []
+        guard let web = webView else { return }
+        web.stopLoading()
+        web.navigationDelegate = nil
+        web.uiDelegate = nil
+        let ucc = web.configuration.userContentController
+        ucc.removeScriptMessageHandler(forName: "mazemaze", contentWorld: Self.world)
+        ucc.removeAllUserScripts()
     }
 
     private func observe(_ web: WKWebView) {
@@ -60,35 +85,47 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             web.observe(\.url, options: [.new]) { [weak self] w, _ in
                 MainActor.assumeIsolated { self?.urlChanged(w) }
             },
-            web.observe(\.title, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.model.pageTitle = w.title ?? "" } },
-            web.observe(\.canGoBack, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.model.canGoBack = w.canGoBack } },
-            web.observe(\.canGoForward, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.model.canGoForward = w.canGoForward } },
-            web.observe(\.isLoading, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.model.isLoading = w.isLoading } },
-            web.observe(\.estimatedProgress, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.model.progress = w.estimatedProgress } },
+            web.observe(\.title, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.pageTitle = w.title ?? "" } },
+            web.observe(\.canGoBack, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.canGoBack = w.canGoBack } },
+            web.observe(\.canGoForward, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.canGoForward = w.canGoForward } },
+            web.observe(\.isLoading, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.isLoading = w.isLoading } },
+            web.observe(\.estimatedProgress, options: [.new]) { [weak self] w, _ in MainActor.assumeIsolated { self?.tab.progress = w.estimatedProgress } },
         ]
     }
 
     private func bindModel(_ web: WKWebView) {
-        model.loadURL = { [weak web] url in web?.load(URLRequest(url: url)) }
-        model.goBack = { [weak web] in web?.goBack() }
-        model.goForward = { [weak web] in web?.goForward() }
-        model.reload = { [weak web] in web?.reload() }
-        model.stopLoading = { [weak web] in web?.stopLoading() }
-        model.pushConfigToPage = { [weak self] in self?.pushConfig() }
-        model.restoreOriginalInPage = { [weak self] in self?.runInWorld("if (window.__mazemaze) { window.__mazemaze.restoreAll(); }") }
+        tab.loadURL = { [weak self, weak web] url in
+            // Remember it for "open in Safari" only if it is an ordinary web address.
+            if ExternalNavigation.classify(url) == .allowInApp { self?.lastUserRequestedURL = url }
+            web?.load(URLRequest(url: url))
+        }
+        tab.goBack = { [weak web] in web?.goBack() }
+        tab.goForward = { [weak web] in web?.goForward() }
+        tab.reload = { [weak web] in web?.reload() }
+        tab.stopLoading = { [weak web] in web?.stopLoading() }
+        tab.pushConfigToPage = { [weak self] in self?.pushConfig() }
+        tab.restoreOriginalInPage = { [weak self] in self?.runInWorld("if (window.__mazemaze) { window.__mazemaze.restoreAll(); }") }
+        tab.pauseInPage = { [weak self] in self?.runInWorld("if (window.__mazemaze) { window.__mazemaze.pause(); }") }
+        tab.resumeInPage = { [weak self] in self?.runInWorld("if (window.__mazemaze) { window.__mazemaze.resume(); }") }
     }
 
     // MARK: URL changes (including single-page-app route changes that never "navigate")
+    /// The URL of the document that is really on screen. `webView.url` also reports the target of a
+    /// load that is still in progress (and may be cancelled), the back-forward list does not.
+    private func committedURL(_ web: WKWebView) -> URL? { web.backForwardList.currentItem?.url ?? web.url }
+
     private func urlChanged(_ web: WKWebView) {
-        let url = web.url
-        model.currentURL = url
-        if let url { model.addressText = url.absoluteString }
-        // Fragment-only changes (#section) are the same page. Anything else is a new page: older
-        // requests become stale and the page script starts over.
-        guard Self.withoutFragment(url) != Self.withoutFragment(lastURL) else { return }
-        lastURL = url
+        if let url = web.url { tab.addressText = url.absoluteString }
+        let committed = committedURL(web)
+        tab.currentURL = committed
+        // Fragment-only changes (#section) are the same page, and a load that was cancelled leaves the
+        // committed page unchanged. Anything else is a new page (including a single-page-app route
+        // change): older requests become stale and the page script starts over.
+        guard Self.withoutFragment(committed) != Self.withoutFragment(lastURL) else { return }
+        lastURL = committed
+        app.tabsChanged()
         Task { @MainActor in
-            await model.pageWillChange()      // bump the generation first ...
+            await tab.pageWillChange()        // bump the generation first ...
             pushConfig()                      // ... then read it back, so the page gets the new one
         }
     }
@@ -108,8 +145,8 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     func pushConfig() {
         guard let web = webView else { return }
         Task { @MainActor in
-            let gen = await model.service.generation
-            let cfg = model.pageConfig(for: web.url, gen: gen)
+            let gen = await app.service.generation(of: tab.id)
+            let cfg = tab.pageConfig(for: committedURL(web), gen: gen)
             runInWorld("if (window.__mazemaze) { window.__mazemaze.configure(cfg); }", arguments: ["cfg": cfg])
         }
     }
@@ -118,7 +155,7 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) async -> (Any?, String?) {
         guard message.name == "mazemaze", message.frameInfo.isMainFrame, let web = message.webView,
-              let pageURL = web.url, message.frameInfo.securityOrigin.host == pageURL.host,
+              let pageURL = committedURL(web), message.frameInfo.securityOrigin.host == pageURL.host,
               message.frameInfo.securityOrigin.protocol == pageURL.scheme else {
             return (nil, "not allowed")
         }
@@ -126,44 +163,119 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         case .failure:
             return (nil, "bad message")
         case .success(.ready):
-            let gen = await model.service.generation
-            return (model.pageConfig(for: pageURL, gen: gen), nil)
+            let gen = await app.service.generation(of: tab.id)
+            return (tab.pageConfig(for: pageURL, gen: gen), nil)
         case .success(.translate(let gen, let text)):
             // Re-check on every request: a single-page app may have moved to a denied page.
-            guard model.decision(for: pageURL).isAllowed, model.translationEnabled, !model.suspendedForPage else {
+            guard app.decision(for: pageURL).isAllowed, app.translationEnabled, !tab.suspendedForPage else {
                 return (["ok": false, "error": "not_allowed", "message": "このページは翻訳しません"], nil)
             }
-            return (await model.translate(gen: gen, text: text), nil)
+            return (await tab.translate(gen: gen, text: text), nil)
         }
     }
 
     // MARK: navigation
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else { return .cancel }
-        guard scheme == "https" || scheme == "http" || url.absoluteString == "about:blank" else { return .cancel }
-        if navigationAction.targetFrame == nil {
-            // target=_blank: stay in this one view, but only for a real tap (no script-opened popups).
-            if navigationAction.navigationType == .linkActivated { webView.load(navigationAction.request) }
+        guard let url = navigationAction.request.url else { return .cancel }
+        let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
+        switch ExternalNavigation.classify(url) {
+        case .blocked:
+            // Embedded widgets (iframes) may use about:/blob:/data:; only the top level is restricted.
+            if !isMainFrame, ["about", "blob", "data"].contains(url.scheme?.lowercased() ?? "") { return .allow }
+            lastIntentionalCancel = Date()
             return .cancel
+        case .safariRedirect(let httpsURL):
+            // The site refuses in-app browsers and sends us to Safari. We do not work around that
+            // (no User-Agent changes); show an explanation instead of a blank page.
+            lastIntentionalCancel = Date()
+            guard isMainFrame else { return .cancel }
+            var asked = lastUserRequestedURL ?? lastMainFrameRequest ?? httpsURL
+            if !["http", "https"].contains(asked.scheme?.lowercased() ?? "") { asked = httpsURL }   // only a web address may go to Safari
+            tab.blockedNavigation = BlockedNavigation(kind: .safariRedirect, openURL: asked, host: asked.host ?? httpsURL.host ?? "")
+            tab.addressText = asked.absoluteString          // show what was asked for, not the redirect
+            tab.siteStatus = "このサイトはアプリ内ブラウザに対応していません（Safari で開けます）"
+            return .cancel
+        case .external(let ext):
+            lastIntentionalCancel = Date()
+            // Only after a real tap; a page that redirects to another app by itself is just ignored.
+            if isMainFrame, navigationAction.navigationType == .linkActivated {
+                tab.blockedNavigation = BlockedNavigation(kind: .otherApp, openURL: ext, host: ext.scheme ?? "")
+            }
+            return .cancel
+        case .allowInApp:
+            if navigationAction.targetFrame == nil {
+                // target=_blank: open it in a new tab, but only for a real tap (no script-opened popups).
+                if navigationAction.navigationType == .linkActivated { app.newTab(url: url) }
+                return .cancel
+            }
+            if isMainFrame, url.scheme != "about" {
+                lastMainFrameRequest = url
+                if navigationAction.navigationType == .linkActivated { lastUserRequestedURL = url }
+            }
+            return .allow
         }
-        return .allow
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if navigationAction.navigationType == .linkActivated,
-           let url = navigationAction.request.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
-            webView.load(navigationAction.request)
+        // window.open(): WebKit only gets here for a user gesture. A new tab, not a pop-up window.
+        if let url = navigationAction.request.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            app.newTab(url: url)
         }
         return nil
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // Not final yet: the load may still be cancelled (Safari redirect) or fail, in which case the
+        // page underneath is untouched. Generation, counters and the "show original" choice are
+        // changed only when a new document commits (see didCommit).
+        tab.dismissBlockedNavigation()
+        hintTask?.cancel()
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        lastURL = committedURL(webView)     // this document is now the committed one (keeps the KVO path from bumping twice)
+        lastUserRequestedURL = nil
         // A real document load (including a reload of the same URL): new generation, fresh counters,
         // and the "this page shows the original" choice is forgotten. The new document asks for its
         // configuration itself once it is ready.
-        model.resetCounters()
-        Task { @MainActor in await model.pageWillChange() }
+        tab.resetCounters()
+        Task { @MainActor in
+            await tab.pageWillChange()
+            pushConfig()      // a no-op while the new document has no script yet; covers pages restored from the cache
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        app.recordVisit(of: tab)
+        scheduleNothingToTranslateHint()
+    }
+
+    /// If, a few seconds after the page loaded, nothing was found to translate (a list of links,
+    /// a menu page), say so instead of leaving the user wondering whether the app works.
+    private func scheduleNothingToTranslateHint() {
+        hintTask?.cancel()
+        hintTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 9_000_000_000)
+            guard let self, !Task.isCancelled, let web = self.webView else { return }
+            guard self.app.decision(for: web.url).isAllowed, self.app.translationEnabled, !self.tab.suspendedForPage,
+                  self.app.settings.serverConfig() != nil, self.tab.blockedNavigation == nil,
+                  self.tab.inflight == 0, self.tab.okCount == 0, self.tab.failCount == 0, self.tab.lastProblem == nil else { return }
+            let st = await self.statusFromPage()
+            let enabled = (st["enabled"] as? Bool) ?? ((st["enabled"] as? Int) == 1)
+            if enabled, st["stopped"] == nil || st["stopped"] is NSNull, (st["replaced"] as? Int ?? 0) == 0, (st["requests"] as? Int ?? 0) == 0, st["blocked"] == nil || st["blocked"] is NSNull {
+                self.tab.siteStatus = "翻訳: このページには翻訳できる本文が見つかりません（記事ページを開くと翻訳されます）"
+            }
+        }
+    }
+
+    func statusFromPage() async -> [String: Any] {
+        guard let web = webView else { return [:] }
+        return await withCheckedContinuation { cont in
+            web.callAsyncJavaScript("return window.__mazemaze ? window.__mazemaze.status() : null", arguments: [:], in: nil, in: Self.world) { result in
+                if case .success(let v) = result, let d = v as? [String: Any] { cont.resume(returning: d) } else { cont.resume(returning: [:]) }
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -177,14 +289,17 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
     private func reportLoadError(_ error: Error) {
         let e = error as NSError
         guard e.code != NSURLErrorCancelled else { return }
-        model.lastProblem = "ページを読み込めません（\(e.localizedDescription)）"
+        // "Frame load interrupted" is what WebKit reports after we refused a navigation on purpose.
+        if e.domain == "WebKitErrorDomain", e.code == 102, Date().timeIntervalSince(lastIntentionalCancel) < 3 { return }
+        tab.lastProblem = "ページを読み込めません（\(e.localizedDescription)）"
+        tab.problemAction = .reload
     }
 
     private var lastCrashReload = Date.distantPast
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // Reload once; a page that keeps crashing must not put the app in a reload loop.
         guard Date().timeIntervalSince(lastCrashReload) > 15 else {
-            model.lastProblem = "このページは表示中に異常終了しました"
+            tab.lastProblem = "このページは表示中に異常終了しました"
             return
         }
         lastCrashReload = Date()

@@ -40,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/show":
             self._json({"modelfile": "FROM /fake/blobs/sha256-0\n", "details": {"format": "gguf"}})
         elif self.path == "/api/chat":
-            time.sleep(0.05)
+            time.sleep(0.4)   # slow enough that the self-test can snapshot the page before the first translation lands
             content = body["messages"][-1]["content"]
             try:
                 spans = json.loads(content)["spans"]          # Qwen adapter (JSON request)

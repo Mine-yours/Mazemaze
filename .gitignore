@@ -12,3 +12,4 @@ xcuserdata/
 *.xcuserstate
 .build/
 .swiftpm/
+.mazemaze_tls/

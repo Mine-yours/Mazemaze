@@ -450,3 +450,54 @@ def test_gemma_mixed_timeout_and_rejections_is_not_a_total_failure():
     assert r.status_code == 200
     data = r.json()
     assert data["mixed_text"] == SAMPLE and data["warnings"]
+
+
+# ---- warm-up ---------------------------------------------------------------------------------
+def test_warmup_loads_the_model_with_a_fixed_request_and_no_user_text():
+    client, fake = make_client()
+    r = client.post("/api/warmup", json={})
+    assert r.status_code == 200 and r.json()["ok"] is True and "elapsed_ms" in r.json()
+    assert len(fake.chat_payloads) == 1 and fake.chat_payloads[0]["keep_alive"] == "30m"
+    assert fake.chat_payloads[0]["model"] == "qwen3.5:9b"
+
+
+def test_warmup_requires_the_token_and_the_same_guards():
+    client, fake = make_client(token="warm-token")
+    assert client.post("/api/warmup", json={}).status_code == 401
+    assert fake.calls == []
+    assert client.post("/api/warmup", json={}, headers={"x-mazemaze-token": "warm-token"}).status_code == 200
+    bad, _ = make_client(base_url="http://evil.com")
+    assert bad.post("/api/warmup", json={}).status_code == 400
+
+
+def test_warmup_skips_when_busy_and_reports_ollama_problems():
+    started, release = threading.Event(), threading.Event()
+
+    def chat(payload):
+        started.set()
+        release.wait(5)
+        return default_chat(payload)
+
+    client, _ = make_client(FakeOllama(chat=chat))
+    t = threading.Thread(target=lambda: post(client))
+    t.start()
+    assert started.wait(5)
+    r = client.post("/api/warmup", json={})
+    assert r.status_code == 200 and r.json() == {"ok": True, "skipped": "busy"}
+    release.set(); t.join(5)
+    down, _ = make_client(FakeOllama(reachable=False))
+    assert down.post("/api/warmup", json={}).status_code == 503
+
+
+def test_busy_reply_tells_clients_to_retry_soon():
+    started, release = threading.Event(), threading.Event()
+
+    def chat(payload):
+        started.set(); release.wait(5)
+        return default_chat(payload)
+
+    client, _ = make_client(FakeOllama(chat=chat))
+    t = threading.Thread(target=lambda: post(client)); t.start()
+    assert started.wait(5)
+    assert post(client).headers["retry-after"] == "2"
+    release.set(); t.join(5)

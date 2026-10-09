@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>短い先頭ノード</title></head>
+<body><main><p id="sf">首相は昨日、<b>強調</b></p></main>
+<script>
+  var p = document.getElementById("sf");
+  var long = "";
+  for (var i = 0; i < 6; i++) long += "これは先頭のあとに続く長い文章の" + i + "番目の文で、とても長く説明が続きます。";
+  p.appendChild(document.createTextNode(long));
+</script></body></html>

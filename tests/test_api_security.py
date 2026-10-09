@@ -175,3 +175,15 @@ def test_run_scripts_bind_correctly():
     assert "--host 0.0.0.0" in lan and "MAZEMAZE_ALLOW_LAN=1" in lan and "openssl rand" in lan
     for text in (local, lan):
         assert "--no-proxy-headers" in text and "--workers" not in text.replace("# --workers", "")
+
+
+def test_status_and_error_shapes_the_iphone_app_uses_to_recognise_this_server():
+    """ios EndpointResolver accepts a host as 'the Mazemaze server' only for these shapes: keep them stable."""
+    ok, _ = make_client()
+    body = ok.get("/api/status").json()
+    assert isinstance(body["model"], str) and isinstance(body["allowed_models"], list)
+    tok, _ = make_client(token=TOKEN)
+    assert tok.get("/api/status").json()["error"]["code"] == "token_required"
+    assert tok.get("/api/status", headers={"host": "evil.com"}).json()["error"]["code"] == "bad_host"
+    far, _ = make_client(client_ip="8.8.8.8")
+    assert far.get("/api/status").json()["error"]["code"] == "forbidden"

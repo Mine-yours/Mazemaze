@@ -8,6 +8,7 @@ struct MazemazeApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .onOpenURL { url in model.receivePairing(url.absoluteString) }     // mazemaze://pair?… from the Camera app
         }
     }
 }

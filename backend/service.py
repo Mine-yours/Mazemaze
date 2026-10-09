@@ -134,6 +134,19 @@ class TranslationService:
                 info.update(ollama_reachable=True, model_installed=True)
         return info
 
+    def warmup(self) -> dict:
+        """One tiny fixed translation with the same options as real requests, so the model is loaded
+        and kept alive. Caller must hold the lock. Raises ServiceError."""
+        started = self._clock()
+        self.check_model()
+        text = "こんにちは、今日はいい天気ですね。"
+        span = Span("s1", 6, 15, text[6:15])
+        client = self._client_factory(self.settings.call_timeout)
+        item = ADAPTERS[self.settings.model](client, self.settings.model).translate(text, [span])
+        if item.error_type:
+            raise ServiceError(item.error_type)
+        return {"ok": True, "elapsed_ms": int((self._clock() - started) * 1000)}
+
     # -- translation --------------------------------------------------------------------------
     def try_acquire(self) -> bool:
         return self._lock.acquire(blocking=False)

@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><title>スクロール</title>
+<style>p{height:300px;margin:0;padding:8px;box-sizing:border-box}</style></head>
+<body><main id="m"></main>
+<script>
+  var m = document.getElementById("m");
+  for (var i = 0; i < 40; i++) { var p = document.createElement("p"); p.id = "q" + i; p.textContent = "第" + i + "番の段落の日本語のテキストです。順番に読まれます。"; m.appendChild(p); }
+</script></body></html>

@@ -14,6 +14,14 @@ ALIASES = {"/login": "/static.html", "/i/flow/login": "/static.html"}
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.split("?", 1)[0] == "/to-safari":      # what x.com does to in-app browsers
+            self.send_response(302)
+            self.send_header("Location", "x-safari-https://redirect.example.com/page?ct=test")
+            self.end_headers()
+            return
+        super().do_GET()
+
     def translate_path(self, path):
         path = path.split("?", 1)[0]
         return super().translate_path(ALIASES.get(path, path))

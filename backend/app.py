@@ -147,7 +147,7 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
     def translate(req: TranslateRequest):
         if not service.try_acquire():
             resp = _error(429, "busy", ServiceError("busy").message)
-            resp.headers["Retry-After"] = "5"
+            resp.headers["Retry-After"] = "2"
             return resp
         try:
             return JSONResponse(service.translate(req.text, req.ratio, req.unit))
@@ -155,6 +155,21 @@ def create_app(settings: Settings | None = None, service: TranslationService | N
             return _error(exc.status, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             log.error("unexpected error: %s", type(exc).__name__)
+            return _error(500, "internal_error", ServiceError("internal_error").message)
+        finally:
+            service.release()
+
+    @app.post("/api/warmup")
+    def warmup():
+        """Load the model before the first real request (a cold start takes 5-20 s). Carries no user text."""
+        if not service.try_acquire():
+            return JSONResponse({"ok": True, "skipped": "busy"})   # someone is translating: the model is loaded
+        try:
+            return JSONResponse(service.warmup())
+        except ServiceError as exc:
+            return _error(exc.status, exc.code, exc.message)
+        except Exception as exc:  # noqa: BLE001
+            log.error("unexpected warmup error: %s", type(exc).__name__)
             return _error(500, "internal_error", ServiceError("internal_error").message)
         finally:
             service.release()

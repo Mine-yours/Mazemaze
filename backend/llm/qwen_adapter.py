@@ -6,6 +6,8 @@ from collections import Counter
 from backend.llm.base import ItemResult, OllamaError, SpanResult, add_stats
 from backend.spans import Span, check_spans, normalize_translation, outside_text, validate_translation
 
+# Keep the model loaded for a while after the last request: loading it again costs 5-20 s.
+KEEP_ALIVE = "30m"
 MODEL = "qwen3.5:9b"
 
 SYSTEM_PROMPT = (
@@ -50,7 +52,7 @@ class QwenAdapter:
             "model": self.name,
             "stream": False,
             "think": False,
-            "keep_alive": "5m",
+            "keep_alive": KEEP_ALIVE,
             "format": SCHEMA,
             "options": dict(OPTIONS),
             "messages": [

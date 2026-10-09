@@ -10,14 +10,14 @@
   if (!bridge) return;
 
   // ---- constants ----------------------------------------------------------------------------
-  var MAX_SCALARS = 600;             // server limit is 1000 code points; smaller requests also answer sooner
+  var CHUNK_TARGET = 160;            // one request is about one model call (the server batches ~150 chars per call)
+  var MAX_SINGLE = 320;              // a single sentence longer than this is split at "、"; longer than this without one is skipped
   var MIN_JA_CHARS = 8;              // a block needs at least this many Japanese characters
   var MAX_REQUESTS_PER_PAGE = 1000;   // safety net only; the native side enforces the user-visible limit
   var MAX_BLOCKS = 600;
   var MAX_NODE_TRIES = 2;
   var MAX_SCAN_NODES = 20000;
-  var START_DELAY_MS = 800;          // minimum wait; then the page must also be quiet (see waitForQuiet)
-  var QUIET_MS = 600, MAX_QUIET_WAIT_MS = 6000;
+  var QUIET_MS = 300, MAX_QUIET_WAIT_MS = 2500;   // start once the DOM has been calm for QUIET_MS (hydration), at most this long
   var SCAN_DEBOUNCE_MS = 250;
   var SWEEP_MS = 2000;
   var PLACEHOLDER = "\u200B";        // keeps the original text node non-empty (normalize() removes empty ones)
@@ -40,7 +40,7 @@
   // ---- state --------------------------------------------------------------------------------
   var state = {
     gen: -1, enabled: false, profile: "generic", blocked: null, requests: 0,
-    running: false, started: false, inflight: false, stopped: null, reqId: 0, backoff: 0, lastMutation: 0, resyncing: false, bridgeRejects: 0
+    running: false, started: false, inflight: false, stopped: null, reqId: 0, backoff: 0, lastMutation: 0, resyncing: false, bridgeRejects: 0, paused: false
   };
   var records = new Set();            // active replacements {node, original, wrapper}
   var byNode = new Map();             // text node -> record
@@ -50,9 +50,15 @@
   var registered = new Map();         // block element -> true
   var visible = new Set();            // block elements near the viewport
   var reappear = new WeakMap();       // text node -> times the page overwrote our change
+  var partial = new Set();            // infos with some parts translated and some still pending
   var io = null, mo = null, popover = null;
   var scanTimer = null, pumpTimer = null, sweepTimer = null, startTimer = null;
   var scanQueue = new Set();
+
+  // Timing, exposed through status() for measurement (no page text, only counts and milliseconds).
+  var T0 = performance.now();
+  var metrics = { startedAt: null, firstSendAt: null, firstApplyAt: null, maxVisible: 0, reqs: [] };
+  function since() { return Math.round(performance.now()); }   // ms since the navigation started
 
   // ---- helpers ------------------------------------------------------------------------------
   function scalarLength(s) { var n = 0; for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); if (c >= 0xD800 && c <= 0xDBFF) i++; n++; } return n; }
@@ -107,15 +113,23 @@
   }
 
   // ---- translation of one group of items -----------------------------------------------------
+  // Parts: roughly CHUNK_TARGET characters, cut at sentence ends (then at "、" for a very long sentence).
+  // Their concatenation is always exactly `core`; null if some piece still cannot be cut small enough.
   function splitParts(core) {
-    if (scalarLength(core) <= MAX_SCALARS) return [core];
+    if (scalarLength(core) <= CHUNK_TARGET) return [core];
     var pieces = core.match(/[^。！？!?\n]*[。！？!?\n]+|[^。！？!?\n]+$/g);
     if (!pieces || pieces.join("") !== core) return null;
-    var parts = [], cur = "";
+    var small = [];
     for (var i = 0; i < pieces.length; i++) {
-      if (scalarLength(pieces[i]) > MAX_SCALARS) return null;
-      if (cur && scalarLength(cur) + scalarLength(pieces[i]) > MAX_SCALARS) { parts.push(cur); cur = ""; }
-      cur += pieces[i];
+      if (scalarLength(pieces[i]) <= MAX_SINGLE) { small.push(pieces[i]); continue; }
+      var sub = pieces[i].match(/[^、]*、|[^、]+$/g);
+      if (!sub || sub.join("") !== pieces[i]) return null;
+      for (var k = 0; k < sub.length; k++) { if (scalarLength(sub[k]) > MAX_SINGLE) return null; small.push(sub[k]); }
+    }
+    var parts = [], cur = "";
+    for (var m = 0; m < small.length; m++) {
+      if (cur && scalarLength(cur) + scalarLength(small[m]) > CHUNK_TARGET) { parts.push(cur); cur = ""; }
+      cur += small[m];
     }
     if (cur) parts.push(cur);
     return parts.join("") === core ? parts : null;
@@ -130,7 +144,7 @@
     if (!core || !isJapaneseEnough(core)) return null;
     var parts = splitParts(core);
     if (!parts) return null;
-    info = { node: node, original: original, lead: m[1], trail: m[3], parts: parts, partPieces: new Array(parts.length), remaining: parts.length };
+    info = { node: node, original: original, lead: m[1], trail: m[3], parts: parts, done: new Array(parts.length), remaining: parts.length, record: null, block: null };
     pendingInfo.set(node, info);
     return info;
   }
@@ -147,16 +161,26 @@
     return out;
   }
 
-  // The next request for a block: consecutive pending parts joined with "\n", <= MAX_SCALARS.
+  // The next request for a block: pending parts (in document order) joined with "\n", about CHUNK_TARGET
+  // characters. Nodes that are already partly translated keep contributing their remaining parts.
   function nextGroup(block) {
-    var nodes = textNodesOf(block), items = [], total = 0, jaTotal = 0;
-    for (var i = 0; i < nodes.length; i++) {
-      var info = infoFor(nodes[i]);
-      if (!info) continue;
+    var infos = [];
+    partial.forEach(function (info) {
+      if (info.block === block && info.node.isConnected && info.record) infos.push(info);
+    });
+    textNodesOf(block).forEach(function (n) { var info = infoFor(n); if (info) { info.block = block; infos.push(info); } });
+    infos.sort(function (a, b) {
+      var pos = a.node.compareDocumentPosition(b.node);
+      return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : (pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0);
+    });
+    var items = [], total = 0, jaTotal = 0;
+    for (var i = 0; i < infos.length; i++) {
+      var info = infos[i];
       for (var p = 0; p < info.parts.length; p++) {
-        if (info.partPieces[p]) continue;
+        if (info.done[p]) continue;
         var len = scalarLength(info.parts[p]);
-        if (items.length && total + 1 + len > MAX_SCALARS) return finishGroup(items, jaTotal);
+        // Stop at about CHUNK_TARGET, but never leave a group too small to be worth sending (a short first node).
+        if (items.length && jaTotal >= MIN_JA_CHARS && total + 1 + len > CHUNK_TARGET) return finishGroup(items, jaTotal);
         total += (items.length ? 1 : 0) + len;
         jaTotal += jaCount(info.parts[p]);
         items.push({ info: info, index: p, text: info.parts[p] });
@@ -164,7 +188,7 @@
     }
     return finishGroup(items, jaTotal);
   }
-  function finishGroup(items, jaTotal) { return items.length && jaTotal >= MIN_JA_CHARS ? items : null; }
+  function finishGroup(items, jaTotal) { return items.length && (jaTotal >= MIN_JA_CHARS || items[0].info.record) ? items : null; }
 
   // Split the server's segments back over the items. English pieces are never split; the "\n"
   // separators must come back as Japanese text. Returns null on any inconsistency.
@@ -221,7 +245,7 @@
     el.lang = "en";
     el.setAttribute("role", "button");
     el.setAttribute("tabindex", "0");
-    el.setAttribute("aria-label", piece.display + "（英語。操作すると元の日本語を表示）");
+    el.setAttribute("aria-label", piece.display);
     el.textContent = piece.display;       // text only, never HTML
     sources.set(el, piece.source);
     setImportant(el, {
@@ -232,29 +256,47 @@
     return el;
   }
 
-  function applyInfo(info) {
-    var node = info.node;
-    if (!node.isConnected || node.nodeValue !== info.original || byNode.has(node)) return false;
-    var pieces = [];
-    for (var i = 0; i < info.partPieces.length; i++) {
-      if (!info.partPieces[i]) return false;
-      pieces = pieces.concat(info.partPieces[i]);
-    }
-    var wrapper = document.createElement("span");
-    wrapper.setAttribute("data-mazemaze", "1");
-    var pendingJa = info.lead;
-    function flush() { if (pendingJa) { wrapper.appendChild(document.createTextNode(pendingJa)); pendingJa = ""; } }
+  function fillPart(container, pieces) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    var pendingJa = "";
+    function flush() { if (pendingJa) { container.appendChild(document.createTextNode(pendingJa)); pendingJa = ""; } }
     for (var k = 0; k < pieces.length; k++) {
-      if (pieces[k].kind === "en") { flush(); wrapper.appendChild(makeEnglish(pieces[k])); }
+      if (pieces[k].kind === "en") { flush(); container.appendChild(makeEnglish(pieces[k])); }
       else pendingJa += pieces[k].display;
     }
-    pendingJa += info.trail;
     flush();
-    node.after(wrapper);
-    node.nodeValue = PLACEHOLDER;
-    var rec = { node: node, original: info.original, wrapper: wrapper };
-    records.add(rec);
-    byNode.set(node, rec);
+  }
+
+  // Show the translation of one part right away. The first part replaces the node's text with a wrapper
+  // that still shows the untranslated rest in Japanese; later parts fill in their own slot.
+  function applyPart(info, index, pieces) {
+    var node = info.node;
+    if (!info.record) {
+      if (!node.isConnected || node.nodeValue !== info.original || byNode.has(node)) return false;
+      var wrapper = document.createElement("span");
+      wrapper.setAttribute("data-mazemaze", "1");
+      if (info.lead) wrapper.appendChild(document.createTextNode(info.lead));
+      var slots = [];
+      for (var i = 0; i < info.parts.length; i++) {
+        var slot = document.createElement("span");
+        slot.setAttribute("data-mz-part", String(i));
+        slot.appendChild(document.createTextNode(info.parts[i]));
+        wrapper.appendChild(slot);
+        slots.push(slot);
+      }
+      if (info.trail) wrapper.appendChild(document.createTextNode(info.trail));
+      node.after(wrapper);
+      node.nodeValue = PLACEHOLDER;
+      var rec = { node: node, original: info.original, wrapper: wrapper, slots: slots, info: info };
+      info.record = rec;
+      records.add(rec);
+      byNode.set(node, rec);
+      partial.add(info);
+    }
+    var record = info.record;
+    if (!record.wrapper.isConnected || !node.isConnected) return false;
+    fillPart(record.slots[index], pieces);
+    if (metrics.firstApplyAt === null) metrics.firstApplyAt = since();
     return true;
   }
 
@@ -266,6 +308,11 @@
       if (at >= 0) rec.node.nodeValue = v.slice(0, at) + rec.original + v.slice(at + PLACEHOLDER.length);   // page edited around our placeholder
     }
     records.delete(rec);
+    if (rec.info) {
+      partial.delete(rec.info);
+      // The text is back to what the page had: the node may be translated again from scratch.
+      rec.info.record = null; rec.info.done = new Array(rec.info.parts.length); rec.info.remaining = rec.info.parts.length;
+    }
     if (byNode.get(rec.node) === rec) byNode.delete(rec.node);
   }
 
@@ -282,7 +329,15 @@
     // The page may have removed or recycled our text nodes (virtual lists, re-renders).
     Array.from(records).forEach(function (rec) {
       if (!rec.node.isConnected) undoRecord(rec, false);
-      else if (!rec.wrapper.isConnected) { undoRecord(rec, true); }
+      else if (!rec.wrapper.isConnected) {
+        // The page removed our wrapper: its original text is back, so translate that node again.
+        var node = rec.node;
+        undoRecord(rec, true);
+        var removals = (reappear.get(node) || 0) + 1;       // a page that keeps removing our wrapper must not loop us forever
+        reappear.set(node, removals);
+        if (removals >= MAX_NODE_TRIES + 1) nodeState.set(node, { tries: MAX_NODE_TRIES, status: "failed" });
+        else if (state.running && state.started) { pendingInfo.delete(node); scheduleScan(node); }
+      }
     });
     registered.forEach(function (_, el) { if (!el.isConnected) { registered.delete(el); visible.delete(el); if (io) io.unobserve(el); } });
     if (mo) mo.takeRecords();
@@ -341,19 +396,24 @@
     pumpTimer = setTimeout(function () { pumpTimer = null; pump(); }, delay);
   }
 
+  // What to translate next: whatever is on screen (top first), then what is just below, then what is above.
   function pickBlock() {
-    var best = null, bestScore = Infinity;
+    if (visible.size > metrics.maxVisible) metrics.maxVisible = visible.size;
+    var best = null, bestScore = Infinity, vh = window.innerHeight || 800;
     visible.forEach(function (el) {
       if (!el.isConnected) { visible.delete(el); registered.delete(el); return; }
       var r = el.getBoundingClientRect();
-      var score = r.bottom < 0 ? 100000 + Math.abs(r.bottom) : Math.abs(r.top);
+      var score;
+      if (r.bottom < 0) score = 1e6 + Math.abs(r.bottom);          // already scrolled past
+      else if (r.top >= vh) score = 1e3 + (r.top - vh);            // below the screen: nearest first
+      else score = Math.max(r.top, 0) / 10;                        // on screen: top first
       if (score < bestScore) { best = el; bestScore = score; }
     });
     return best;
   }
 
   function pump() {
-    if (!state.running || state.inflight) return;
+    if (!state.running || state.inflight || state.paused) return;
     if (state.requests >= MAX_REQUESTS_PER_PAGE) { state.stopped = "limit"; stopWork(); return; }
     var el = pickBlock();
     if (!el) return;
@@ -372,7 +432,10 @@
     state.inflight = true;
     state.requests++;
     var text = items.map(function (i) { return i.text; }).join("\n");
+    var sentAt = performance.now();
+    if (metrics.firstSendAt === null) metrics.firstSendAt = since();
     ask({ type: "translate", gen: gen, text: text }).then(function (reply) {
+      if (metrics.reqs.length < 200) metrics.reqs.push({ ms: Math.round(performance.now() - sentAt), chars: text.length, ok: !!(reply && reply.ok), at: since() });
       if (id !== state.reqId) return;                      // superseded (page change / reconfigure)
       state.inflight = false;
       if (gen !== state.gen || !state.running) return;
@@ -392,11 +455,14 @@
         if (distributed) {
           state.backoff = 0;
           items.forEach(function (it, idx) {
-            if (it.info.partPieces[it.index]) return;      // already filled
-            it.info.partPieces[it.index] = distributed[idx];
-            it.info.remaining--;
-            if (it.info.remaining === 0) {
-              if (!applyInfo(it.info)) nodeState.set(it.info.node, { tries: MAX_NODE_TRIES, status: "failed" });
+            if (it.info.done[it.index]) return;             // already filled
+            if (applyPart(it.info, it.index, distributed[idx])) {
+              it.info.done[it.index] = true;
+              it.info.remaining--;
+              if (it.info.remaining === 0) partial.delete(it.info);   // fully translated
+            } else {
+              nodeState.set(it.info.node, { tries: MAX_NODE_TRIES, status: "failed" });
+              partial.delete(it.info);
             }
           });
           if (mo) mo.takeRecords();
@@ -424,7 +490,7 @@
     }, function () { state.resyncing = false; });
   }
   function failItems(items, code) {
-    var fatal = code === "unauthorized" || code === "not_configured" || code === "limit_reached" || code === "not_allowed";
+    var fatal = code === "unauthorized" || code === "not_configured" || code === "limit_reached" || code === "not_allowed" || code === "pin_mismatch" || code === "certificate_untrusted";
     if (code === "stale") { resync(); return; }
     if (fatal) { state.stopped = code; stopWork(); return; }
     if (code === "bridge") {
@@ -463,7 +529,7 @@
       io = new IntersectionObserver(function (entries) {
         entries.forEach(function (e) { if (e.isIntersecting) visible.add(e.target); else visible.delete(e.target); });
         schedulePump(0);
-      }, { rootMargin: "300px 0px 300px 0px" });
+      }, { rootMargin: "0px 0px 150% 0px" });   // read-ahead: one and a half screens below, none above (translated text above would shift the view)
       registered.forEach(function (_, el) { io.observe(el); });
     } else if (io) {
       // Same generation reconfigured: re-observe so visible blocks are reported again.
@@ -515,7 +581,7 @@
   // ---- tap on English -> show the original --------------------------------------------------
   function hidePopover() { if (popover && popover.parentNode) popover.remove(); popover = null; }
 
-  function showPopover(el) {
+  function showPopover(el, point) {
     hidePopover();
     var source = sources.get(el);
     if (typeof source !== "string") return;
@@ -532,10 +598,14 @@
       "display": "block", "visibility": "hidden"
     });
     document.documentElement.appendChild(p);
+    // Anchor at the tap for a phrase that wraps over several lines; at the element otherwise.
     var r = el.getBoundingClientRect();
-    var left = Math.max(8, Math.min(r.left, window.innerWidth - p.offsetWidth - 8));
-    var below = r.bottom + 6;
-    var top = below + p.offsetHeight + 8 <= window.innerHeight ? below : Math.max(8, r.top - 6 - p.offsetHeight);
+    // A synthetic click (VoiceOver) reports 0,0: use the point only when it lies on the element.
+    var usePoint = point && (point.x || point.y) && point.x >= r.left - 24 && point.x <= r.right + 24 && point.y >= r.top - 24 && point.y <= r.bottom + 24;
+    var ax = usePoint ? point.x : r.left, ayTop = usePoint ? point.y - 12 : r.top, ayBottom = usePoint ? point.y + 14 : r.bottom;
+    var left = Math.max(8, Math.min(ax - 16, window.innerWidth - p.offsetWidth - 8));
+    var below = ayBottom + 6;
+    var top = below + p.offsetHeight + 8 <= window.innerHeight ? below : Math.max(8, ayTop - 6 - p.offsetHeight);
     p.style.setProperty("left", (window.scrollX + left) + "px", "important");
     p.style.setProperty("top", (window.scrollY + top) + "px", "important");
     p.style.setProperty("visibility", "visible", "important");
@@ -549,7 +619,7 @@
       e.preventDefault();
       e.stopPropagation();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      if (popover && popover.__for === en) hidePopover(); else { showPopover(en); if (popover) popover.__for = en; }
+      if (popover && popover.__for === en) hidePopover(); else { showPopover(en, { x: e.clientX, y: e.clientY }); if (popover) popover.__for = en; }
     } else if (popover && !(t && popover.contains && popover.contains(t))) {
       hidePopover();
     }
@@ -563,16 +633,26 @@
     } else if (e.key === "Escape") { hidePopover(); }
   }, true);
 
-  // Page activity tracker for waitForQuiet (frameworks hydrate right after load).
+  // Page activity tracker for waitForQuiet (frameworks hydrate right after load). Only changes inside
+  // the article area count: ads and trackers keep changing the rest of the page for seconds.
   try {
-    new MutationObserver(function () { state.lastMutation = performance.now(); })
-      .observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true });
+    new MutationObserver(function (records) {
+      var haveRoot = !!document.querySelector("article,main,[role='main']");
+      for (var i = 0; i < records.length; i++) {
+        var t = records[i].target;
+        var el = t.nodeType === 1 ? t : t.parentElement;
+        if (!haveRoot || (el && el.closest && el.closest("article,main,[role='main']"))) { state.lastMutation = performance.now(); break; }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     state.lastMutation = performance.now();
   } catch (e) { /* ignore */ }
 
   // ---- control (called by Swift) ------------------------------------------------------------
   function configure(cfg) {
     var genChanged = cfg.gen !== state.gen;
+    var profile = cfg.profile === "x" ? "x" : "generic";
+    // The same configuration again (several pushes for one page) must not restart the start-up wait.
+    if (!genChanged && state.running && state.enabled === !!cfg.enabled && state.profile === profile) return status();
     stopWork();
     if (genChanged || !cfg.enabled) {
       restoreAll();
@@ -582,7 +662,7 @@
     }
     state.gen = cfg.gen;
     state.enabled = !!cfg.enabled;
-    state.profile = cfg.profile === "x" ? "x" : "generic";
+    state.profile = profile;
     state.inflight = false;
     state.stopped = null;
     if (genChanged) state.requests = 0;
@@ -593,17 +673,20 @@
     }
     state.running = true;
     state.backoff = 0;
-    var begun = Date.now(), first = true;
+    var begun = Date.now();
     (function waitForQuiet() {
       startTimer = setTimeout(function () {
         startTimer = null;
         if (!state.running) return;
-        var quiet = performance.now() - state.lastMutation >= QUIET_MS && document.readyState === "complete";
-        if (!quiet && Date.now() - begun < MAX_QUIET_WAIT_MS) { waitForQuiet(); return; }   // SSR hydration still running
+        // Wait until the DOM has been calm for QUIET_MS (frameworks hydrate right after load), but not
+        // for the whole page to finish loading, and never longer than MAX_QUIET_WAIT_MS.
+        var calm = performance.now() - state.lastMutation >= QUIET_MS && document.readyState !== "loading";
+        if (!calm && Date.now() - begun < MAX_QUIET_WAIT_MS) { waitForQuiet(); return; }
         state.started = true;
+        if (metrics.startedAt === null) metrics.startedAt = since();
         startObservers();
         scan(document.body || document.documentElement);
-      }, first ? (first = false, START_DELAY_MS) : 300);
+      }, QUIET_MS / 3);
     })();
     return status();
   }
@@ -611,13 +694,21 @@
   function status() {
     return {
       gen: state.gen, enabled: state.enabled, running: state.running, blocked: state.blocked,
-      stopped: state.stopped, requests: state.requests, replaced: records.size,
-      english: document.querySelectorAll("[data-mz-en]").length
+      stopped: state.stopped, paused: state.paused, requests: state.requests, replaced: records.size,
+      english: document.querySelectorAll("[data-mz-en]").length, metrics: metrics, now: since()
     };
   }
 
   window.__mazemaze = {
     configure: configure,
+    // A tab that is not on screen stops asking for translations (what is shown stays as it is).
+    pause: function () { state.paused = true; return status(); },
+    resume: function () {
+      state.paused = false;
+      if (io) registered.forEach(function (_, el) { io.unobserve(el); io.observe(el); });
+      schedulePump(0);
+      return status();
+    },
     restoreAll: function () { stopWork(); state.enabled = false; restoreAll(); if (mo) { mo.disconnect(); mo = null; } return status(); },
     status: status
   };

@@ -5,6 +5,8 @@ from backend.llm.base import ItemResult, OllamaError, SpanResult, add_stats
 from backend.spans import (Span, check_spans, looks_like_preamble, normalize_translation,
                            outside_text, validate_translation)
 
+# Keep the model loaded for a while after the last request: loading it again costs 5-20 s.
+KEEP_ALIVE = "30m"
 MODEL = "translategemma:12b"
 
 PROMPT_TEMPLATE = (
@@ -41,7 +43,7 @@ class TranslateGemmaAdapter:
         return {
             "model": self.name,
             "stream": False,
-            "keep_alive": "5m",
+            "keep_alive": KEEP_ALIVE,
             "options": dict(OPTIONS),
             "messages": [{"role": "user", "content": build_prompt(source)}],
         }

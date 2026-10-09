@@ -51,6 +51,11 @@ func okResponse(for request: HTTPRequest, english: String = "Hello") -> HTTPResp
     return HTTPResponse(status: 200, body: try! JSONSerialization.data(withJSONObject: body))
 }
 
+/// A reply that looks like the Mazemaze server's own 401.
+func serverUnauthorized() -> HTTPResponse {
+    HTTPResponse(status: 401, body: try! JSONSerialization.data(withJSONObject: ["error": ["code": "token_required", "message": "x"]]))
+}
+
 func jsonResponse(_ status: Int, message: String? = nil, headers: [String: String] = [:]) -> HTTPResponse {
     let body = message.map { try! JSONSerialization.data(withJSONObject: ["error": ["code": "x", "message": $0]]) } ?? Data("{}".utf8)
     return HTTPResponse(status: status, headers: headers, body: body)
@@ -421,5 +426,258 @@ final class TransportAndSettingsTests: XCTestCase {
         _ = await ConnectionChecker.check(config: cfg, transport: t)
         XCTAssertEqual(t.requests[0].headers["X-Mazemaze-Token"], "t")
         XCTAssertEqual(t.requests[0].url.path, "/api/status")
+    }
+}
+
+final class WarmupTests: XCTestCase {
+    func testWarmupSendsAnAuthenticatedBodylessRequestOnceThenSkipsWhileFresh() async {
+        let t = MockTransport { r, _ in
+            r.url.path == "/api/warmup" ? HTTPResponse(status: 200, body: Data("{\"ok\":true}".utf8)) : okResponse(for: r) }
+        let clock = ManualClock()
+        let s = makeService(t, clock: clock)
+        let asked = await s.warmupIfStale()
+        XCTAssertTrue(asked)
+        XCTAssertEqual(t.requests[0].url.path, "/api/warmup")
+        XCTAssertEqual(t.requests[0].method, "POST")
+        XCTAssertEqual(t.requests[0].headers["X-Mazemaze-Token"], "secret-token")
+        XCTAssertEqual(String(data: t.requests[0].body ?? Data(), encoding: .utf8), "{}")      // no page text
+        let again = await s.warmupIfStale()
+        XCTAssertFalse(again)                                   // answered a moment ago
+        clock.advance(21 * 60)
+        let stale = await s.warmupIfStale()
+        XCTAssertTrue(stale)
+        XCTAssertEqual(t.count, 2)
+    }
+
+    func testARecentTranslationCountsAsFresh() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = makeService(t)
+        _ = await s.translate(gen: 0, text: "最近翻訳したテキストです")
+        let asked = await s.warmupIfStale()
+        XCTAssertFalse(asked)
+        XCTAssertEqual(t.count, 1)
+    }
+
+    func testWarmupSharesTheSingleQueueAndIgnoresFailures() async {
+        let gate = AsyncGate()
+        let t = MockTransport { r, _ in
+            if r.url.path == "/api/warmup" { await gate.wait(); return HTTPResponse(status: 503) }
+            return okResponse(for: r) }
+        let s = makeService(t)
+        let w = Task { await s.warmupIfStale() }
+        while t.count == 0 { await Task.yield() }
+        let tr = Task { await s.translate(gen: 0, text: "ウォームアップの後ろで待つテキスト") }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(t.count, 1)                              // the translation waits for the slot
+        await gate.release()
+        _ = await w.value
+        let out = await tr.value
+        guard case .success = out else { return XCTFail("\(out)") }
+        XCTAssertEqual(t.maxActive, 1)
+        let paused = await s.isPaused
+        XCTAssertFalse(paused)                                  // a failed warm-up never trips the breaker
+    }
+
+    func testNoConfigNoWarmup() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = TranslationService(transport: t, config: { nil }, prefs: { (0.3, .phrase) })
+        let asked = await s.warmupIfStale()
+        XCTAssertFalse(asked)
+        XCTAssertEqual(t.count, 0)
+    }
+}
+
+final class ScopeTests: XCTestCase {
+    func testTabsHaveIndependentGenerations() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = makeService(t)
+        let a = await s.bumpGeneration(scope: 1)
+        _ = await s.bumpGeneration(scope: 2)
+        _ = await s.bumpGeneration(scope: 2)
+        let g2 = await s.generation(of: 2)
+        let g1 = await s.generation(of: 1)
+        XCTAssertEqual(a, 1); XCTAssertEqual(g1, 1); XCTAssertEqual(g2, 2)
+        let ok = await s.translate(scope: 1, gen: 1, text: "タブ一のテキストです")
+        guard case .success = ok else { return XCTFail() }
+        let stale = await s.translate(scope: 2, gen: 1, text: "タブ二の古い世代のテキスト")
+        XCTAssertEqual(stale, .failure(.stale))
+        _ = await s.bumpGeneration(scope: 1)       // tab 1 navigates
+        let still = await s.translate(scope: 2, gen: 2, text: "タブ二は影響を受けないテキスト")
+        guard case .success = still else { return XCTFail("tab 2 must not go stale when tab 1 navigates") }
+    }
+
+    func testTheTabOnScreenGetsTheServerFirst() async {
+        let gate = AsyncGate()
+        let order = OrderBox()
+        let t = MockTransport { r, _ in order.add(MockTransport.text(of: r) ?? ""); return okResponse(for: r) }
+        t.gates["先頭の要求です"] = gate
+        let s = makeService(t)
+        _ = await s.bumpGeneration(scope: 1); _ = await s.bumpGeneration(scope: 2)
+        await s.setActiveScope(2)
+        let head = Task { await s.translate(scope: 1, gen: 1, text: "先頭の要求です") }
+        while t.count == 0 { await Task.yield() }
+        let bg = Task { await s.translate(scope: 1, gen: 1, text: "背景タブの要求です") }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        let fg = Task { await s.translate(scope: 2, gen: 1, text: "前面タブの要求です") }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        await gate.release()
+        _ = await head.value; _ = await bg.value; _ = await fg.value
+        XCTAssertEqual(order.all, ["先頭の要求です", "前面タブの要求です", "背景タブの要求です"])
+    }
+
+    func testNoStarvation() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = makeService(t)
+        _ = await s.bumpGeneration(scope: 1); _ = await s.bumpGeneration(scope: 2)
+        await s.setActiveScope(2)
+        async let bg = s.translate(scope: 1, gen: 1, text: "背景だけの要求ですよ")
+        async let f1 = s.translate(scope: 2, gen: 1, text: "前面の要求その一です")
+        async let f2 = s.translate(scope: 2, gen: 1, text: "前面の要求その二です")
+        let results = await [bg, f1, f2]
+        for r in results { guard case .success = r else { return XCTFail("\(r)") } }
+    }
+
+    func testClosingATabDropsItsWaitersAndState() async {
+        let gate = AsyncGate()
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        t.gates["占有する要求です"] = gate
+        let s = makeService(t)
+        _ = await s.bumpGeneration(scope: 1); _ = await s.bumpGeneration(scope: 2)
+        let hold = Task { await s.translate(scope: 1, gen: 1, text: "占有する要求です") }
+        while t.count == 0 { await Task.yield() }
+        let waiting = Task { await s.translate(scope: 2, gen: 1, text: "閉じられるタブの要求です") }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        await s.removeScope(2)
+        let out = await waiting.value
+        XCTAssertEqual(out, .failure(.stale))
+        await gate.release()
+        _ = await hold.value
+        XCTAssertEqual(t.count, 1)
+        let g = await s.generation(of: 2)
+        XCTAssertGreaterThan(g, 0)          // the bumped generation stays: a late reply can never match again
+    }
+
+    func testConfigurationChangeStalesEveryTab() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = makeService(t)
+        _ = await s.bumpGeneration(scope: 1); _ = await s.bumpGeneration(scope: 2)
+        await s.configurationChanged()
+        let a = await s.translate(scope: 1, gen: 1, text: "設定変更のあとのテキストＡ")
+        let b = await s.translate(scope: 2, gen: 1, text: "設定変更のあとのテキストＢ")
+        XCTAssertEqual(a, .failure(.stale)); XCTAssertEqual(b, .failure(.stale))
+    }
+
+    func testRequestLimitIsPerTab() async {
+        var o = TranslationService.Options(); o.maxRequestsPerGeneration = 2
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = makeService(t, options: o)
+        _ = await s.bumpGeneration(scope: 1); _ = await s.bumpGeneration(scope: 2)
+        for i in 0..<2 { _ = await s.translate(scope: 1, gen: 1, text: "タブ一の要求その\(i)です") }
+        let over = await s.translate(scope: 1, gen: 1, text: "タブ一の上限超えの要求")
+        XCTAssertEqual(over, .failure(.limitReached))
+        let other = await s.translate(scope: 2, gen: 1, text: "タブ二はまだ使える要求")
+        guard case .success = other else { return XCTFail() }
+    }
+}
+
+final class OrderBox: @unchecked Sendable {
+    private let l = NSLock(); private var items: [String] = []
+    func add(_ s: String) { l.lock(); items.append(s); l.unlock() }
+    var all: [String] { l.lock(); defer { l.unlock() }; return items }
+}
+
+final class ResolverAndPinServiceTests: XCTestCase {
+    func cfgService(_ t: HTTPTransport, resolver: EndpointResolver?, fallback: Bool = true, clock: ManualClock = ManualClock()) -> TranslationService {
+        let cfg = ServerConfig(baseURL: URL(string: "http://mac.local:8000")!, token: "secret-token",
+                               fallbackURL: fallback ? URL(string: "http://192.168.0.19:8000")! : nil)
+        return TranslationService(transport: t, config: { cfg }, prefs: { (0.3, .phrase) }, clock: clock, resolver: resolver)
+    }
+
+    func testFallsBackToTheIPAddressWhenTheNameCannotBeFound_andNeverSendsTheTokenWhileProbing() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "mac.local" { throw URLError(.cannotFindHost) }
+            if r.url.path == "/api/status" { return serverUnauthorized() }
+            return okResponse(for: r)
+        }
+        let s = cfgService(t, resolver: EndpointResolver(transport: t))
+        let out = await s.translate(gen: 0, text: "名前解決に失敗するテキスト")
+        guard case .success = out else { return XCTFail("\(out)") }
+        let probes = t.requests.filter { $0.url.path == "/api/status" }
+        XCTAssertEqual(probes.map { $0.url.host }, ["mac.local", "192.168.0.19"])
+        XCTAssertTrue(probes.allSatisfy { $0.headers["X-Mazemaze-Token"] == nil })        // probes carry no token
+        let translate = t.requests.last!
+        XCTAssertEqual(translate.url.host, "192.168.0.19")
+        XCTAssertEqual(translate.headers["X-Mazemaze-Token"], "secret-token")
+    }
+
+    func testThePreferredNameIsUsedWhenItAnswers_andTheChoiceIsRemembered() async {
+        let t = MockTransport { r, _ in r.url.path == "/api/status" ? serverUnauthorized() : okResponse(for: r) }
+        let s = cfgService(t, resolver: EndpointResolver(transport: t))
+        _ = await s.translate(gen: 0, text: "最初のテキストです")
+        _ = await s.translate(gen: 0, text: "二つ目のテキストです")
+        XCTAssertEqual(t.requests.filter { $0.url.path == "/api/status" }.count, 1)       // probed once, then remembered
+        XCTAssertTrue(t.requests.filter { $0.url.path == "/api/translate" }.allSatisfy { $0.url.host == "mac.local" })
+    }
+
+    func testAHostThatDoesNotAnswerLikeTheServerIsNotChosen() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "mac.local" { return HTTPResponse(status: 404) }        // something else lives at this name
+            return r.url.path == "/api/status" ? serverUnauthorized() : okResponse(for: r)
+        }
+        let resolver = EndpointResolver(transport: t)
+        let cfg = ServerConfig(baseURL: URL(string: "http://mac.local:8000")!, token: "t", fallbackURL: URL(string: "http://192.168.0.19:8000")!)
+        let chosen = await resolver.resolve(cfg)
+        XCTAssertEqual(chosen.host, "192.168.0.19")
+    }
+
+    func testAnotherDeviceThatJustSaysUnauthorizedIsNotTheServer() async {
+        let t = MockTransport { r, _ in
+            if r.url.host == "mac.local" { throw URLError(.cannotFindHost) }
+            return HTTPResponse(status: 401, body: Data("Unauthorized".utf8))          // a router / NAS / printer
+        }
+        let cfg = ServerConfig(baseURL: URL(string: "https://mac.local:8000")!, token: "t", fallbackURL: URL(string: "https://192.168.0.19:8000")!)
+        let chosen = await EndpointResolver(transport: t).resolve(cfg)
+        XCTAssertEqual(chosen.host, "mac.local")                  // nothing qualified: the primary is kept, the token never goes elsewhere
+        XCTAssertTrue(t.requests.allSatisfy { $0.headers["X-Mazemaze-Token"] == nil })
+    }
+
+    func testNobodyAnsweringIsRememberedBrieflyInsteadOfWaitingForEveryRequest() async {
+        let t = MockTransport { _, _ in throw URLError(.cannotConnectToHost) }
+        let clock = ManualClock()
+        let resolver = EndpointResolver(transport: t, clock: clock)
+        let cfg = ServerConfig(baseURL: URL(string: "http://mac.local:8000")!, token: "t", fallbackURL: URL(string: "http://192.168.0.19:8000")!)
+        _ = await resolver.resolve(cfg)
+        let probesFirst = t.count
+        _ = await resolver.resolve(cfg); _ = await resolver.resolve(cfg)
+        XCTAssertEqual(t.count, probesFirst)                      // no new probes within the next few seconds
+        clock.advance(11)
+        _ = await resolver.resolve(cfg)
+        XCTAssertGreaterThan(t.count, probesFirst)
+    }
+
+    func testNoFallbackMeansNoProbing() async {
+        let t = MockTransport { r, _ in okResponse(for: r) }
+        let s = cfgService(t, resolver: EndpointResolver(transport: t), fallback: false)
+        _ = await s.translate(gen: 0, text: "代替の住所がないテキスト")
+        XCTAssertEqual(t.requests.filter { $0.url.path == "/api/status" }.count, 0)
+    }
+
+    func testAPinMismatchIsReportedAsSuchAndCountsAsNothing() async {
+        let t = MockTransport { _, _ in throw PinMismatchError() }
+        let s = cfgService(t, resolver: nil)
+        for i in 0..<4 { let out = await s.translate(gen: 0, text: "証明書が違うテキスト\(i)"); XCTAssertEqual(out, .failure(.pinMismatch)) }
+        XCTAssertEqual(t.count, 4)                                   // not paused by the breaker, every attempt reaches the transport
+        let paused = await s.isPaused
+        XCTAssertFalse(paused)
+        XCTAssertTrue(TranslationFailure.pinMismatch.message.contains("証明書"))
+        XCTAssertEqual(TranslationFailure.pinMismatch.code, "pin_mismatch")
+    }
+
+    func testConnectionCheckExplainsAPinMismatch() async {
+        let t = MockTransport { _, _ in throw PinMismatchError() }
+        let cfg = ServerConfig(baseURL: URL(string: "https://mac.local:8000")!, token: "t", pinnedFingerprint: String(repeating: "ab", count: 32))
+        let report = await ConnectionChecker.check(config: cfg, transport: t)
+        XCTAssertEqual(report.state, .failed)
+        XCTAssertTrue(report.message.contains("証明書"))
     }
 }

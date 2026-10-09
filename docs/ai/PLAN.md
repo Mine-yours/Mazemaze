@@ -23,4 +23,8 @@
 | B1 iOS 土台（Xcode プロジェクト、SwiftUI ブラウザ、設定、接続確認、ATS/ローカルネットワーク） | DONE（実機未確認） | `swift test`、シミュレータ自己テスト、Release 実機向けビルド | `ios/` |
 | B2 ページの自動英語化（`translator.js`、WKContentWorld、置換・復元・原文表示） | DONE（実機未確認） | Chrome DOM テスト 59 件、シミュレータ自己テスト 14 項目 | |
 | B3 動的サイト対応（MutationObserver、視認範囲優先、直列、重複/ループ防止） | DONE（実 X は未確認） | DOM テスト、実 Yahoo!ニュース記事で確認 | X はログイン必須 |
-| 次: iPhone 実機確認・実 X での確認・人手採点・モデル正式選定 | TODO | | |
+| C1 翻訳待ち時間の短縮（開始待ち・部分反映・先読み・warmup・計測） | DONE（実機未確認） | `ios/scripts/bench.sh` の前後比較、DOM テスト 71 | 4.9s→1.1s |
+| C2 ホーム・お気に入り・最近・検索の明示 | DONE（実機未確認） | `SessionPrivacyTests`・`AddressInputTests`、結合テスト | |
+| C3 タブ（休止・復元・タブ別世代） | DONE（実機未確認） | `ScopeTests`・結合テスト 36 項目 | |
+| C4 ペアリング（QR/文字列・TLS ピン留め・`.local` + IP） | DONE（実機未確認） | `PairingTests`・結合テスト（TLS）・persistence_test | |
+| 次: iPhone 実機確認（v2）・X の再検討（第2段階）・人手採点・モデル正式選定 | TODO | `docs/ai/IPHONE_DEVICE_CHECKLIST.md` | |
