@@ -1,3 +1,5 @@
+> **注意（2026-10-10）**: この文書は、Mac のローカルモデルを使う版（ブランチ `mac-local-model`）の時代の記録です。`main` は iPhone 単体版になり、ここに出てくる FastAPI サーバー・Web UI・Ollama・QR ペアリング・Tailscale は `main` にはありません。
+
 # Mazemaze 翻訳モデル比較評価レポート（Qwen3.5:9b / TranslateGemma:12b）
 
 - 作成日: 2026-10-08

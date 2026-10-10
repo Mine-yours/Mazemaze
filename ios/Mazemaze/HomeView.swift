@@ -1,7 +1,7 @@
 import SwiftUI
 import MazemazeCore
 
-/// Mazemaze's own start screen: connection state, favorites, recent sites. Nothing is opened for you.
+/// Mazemaze's own start screen: what translates on this iPhone, favorites, recent sites. Nothing is opened for you.
 struct HomeView: View {
     @ObservedObject var tab: TabModel
     @EnvironmentObject var model: AppModel
@@ -15,7 +15,7 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
-                connectionCard
+                statusCard
                 pasteCard
                 favoritesSection
                 recentsSection
@@ -24,8 +24,8 @@ struct HomeView: View {
             .padding(.horizontal, 16).padding(.vertical, 12)
         }
         .background(Color(.systemBackground))
-        .onAppear { model.refreshConnectionStatus() }
-        .onChange(of: scenePhase) { phase in if phase == .active { model.refreshConnectionStatus() } }
+        .onAppear { model.refreshEngineStatus() }
+        .onChange(of: scenePhase) { phase in if phase == .active { model.refreshEngineStatus() } }
     }
 
     private var header: some View {
@@ -36,90 +36,32 @@ struct HomeView: View {
         }
     }
 
-    // MARK: connection
-    /// The card is about the page translation (the thing the home screen is for). The word meanings and the fallback get their own rows.
-    private var pageOnMac: Bool { model.translationEngine == .mac }
-    /// The page translation is "Mac" but no Mac is paired, and the iPhone takes over: nothing to worry about, only a hint.
-    private var macMissingButCovered: Bool { pageOnMac && model.settings.serverConfig() == nil && model.fallbackToDevice }
-    private var macConfigured: Bool { model.settings.serverConfig() != nil }
-
-    private var connectionCard: some View {
+    // MARK: status
+    /// What translates on this iPhone, and anything that has to be done before it can (data to download, Apple Intelligence to switch on).
+    private var statusCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Image(systemName: connectionSymbol).foregroundStyle(connectionColor).accessibilityHidden(true)
-                Text(connectionTitle).font(.headline)
-                Spacer()
-                if pageOnMac && model.checkingConnection { ProgressView().controlSize(.small) }
+                Image(systemName: pageProblem == nil ? "iphone" : "exclamationmark.triangle.fill").foregroundStyle(pageProblem == nil ? Color.green : Color.orange).accessibilityHidden(true)
+                Text(pageProblem == nil ? "ページの翻訳は iPhone の中で行います" : "翻訳の準備が必要です").font(.headline)
             }
-            Text(connectionDetail).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if pageOnMac && macConfigured {
-                Label(model.settings.pinnedFingerprint != nil ? "通信は暗号化されています（証明書で Mac を確認）" : "通信は暗号化されていません（HTTP）。自宅の Wi-Fi だけで使ってください",
-                      systemImage: model.settings.pinnedFingerprint != nil ? "lock.fill" : "lock.open")
-                    .font(.footnote).foregroundStyle(.secondary)
+            Text(pageProblem ?? "通信は使わず、ページの文章は iPhone の外に出ません。").font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Label("ページの翻訳: \(model.translationEngine.title)", systemImage: "doc.plaintext")
+                Label("単語の意味（AI）: Apple Intelligence" + (model.foundationModelsProblem.map { "（\($0)）" } ?? ""), systemImage: "character.book.closed")
             }
-            enginesRows
-            HStack {
-                Button(macConfigured ? "設定を開く" : (pageOnMac ? "サーバーを設定する" : "設定を開く")) { showSettings = true }.buttonStyle(.bordered).frame(minHeight: 44)
-                if pageOnMac && macConfigured {
-                    Button("もう一度確認") { model.refreshConnectionStatus() }.buttonStyle(.bordered).frame(minHeight: 44).disabled(model.checkingConnection)
-                }
-            }
+            .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button("設定を開く") { showSettings = true }.buttonStyle(.bordered).frame(minHeight: 44)
         }
         .padding(14)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .contain)
     }
 
-    /// Which engine makes what, shown whenever the iPhone makes any of it (or takes over when the Mac cannot be reached).
-    @ViewBuilder private var enginesRows: some View {
-        if model.translationEngine.runsOnDevice || model.meaningEngine.runsOnDevice || model.fallbackToDevice {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("ページの翻訳: \(model.translationEngine.title)", systemImage: "doc.plaintext")
-                Label("単語の意味: \(model.meaningEngine.title)" + (meaningNote.map { "（\($0)）" } ?? ""), systemImage: "character.book.closed")
-                if model.fallbackToDevice { Label("Mac に繋がらないとき: \(model.deviceTranslation.title) が代わりに処理", systemImage: "arrow.triangle.branch") }
-            }
-            .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private var pageProblem: String? {
         switch model.translationEngine {
-        case .mac: return nil
         case .foundationModels: return model.foundationModelsProblem
         case .appleTranslation: return model.appleTranslationInstalled ? nil : model.appleTranslationStatus
         }
-    }
-    /// What is wrong with the engine that makes word meanings, if anything.
-    private var meaningNote: String? {
-        switch model.meaningEngine {
-        case .foundationModels: return model.foundationModelsProblem
-        case .mac: return model.settings.serverConfig() == nil && !pageOnMac ? "Mac が未設定です" : nil
-        }
-    }
-
-    private var connectionSymbol: String {
-        if !pageOnMac { return pageProblem == nil ? "iphone" : "exclamationmark.triangle.fill" }
-        if macMissingButCovered { return "iphone" }
-        if model.needsSetup { return "exclamationmark.triangle.fill" }
-        switch model.connection?.state { case .ok?: return "checkmark.circle.fill"; case .warning?: return "exclamationmark.triangle.fill"; case .failed?: return "xmark.octagon.fill"; case nil: return "questionmark.circle" }
-    }
-    private var connectionColor: Color {
-        if !pageOnMac { return pageProblem == nil ? .green : .orange }
-        if macMissingButCovered { return .secondary }
-        if model.needsSetup { return .orange }
-        switch model.connection?.state { case .ok?: return .green; case .warning?: return .orange; case .failed?: return .red; case nil: return .secondary }
-    }
-    private var connectionTitle: String {
-        if !pageOnMac { return pageProblem == nil ? "ページの翻訳は iPhone で行います" : "iPhone の翻訳の準備が必要です" }
-        if macMissingButCovered { return "Mac は未設定です（iPhone で処理します）" }
-        if model.needsSetup { return "翻訳サーバー（Mac）が未設定です" }
-        switch model.connection?.state { case .ok?: return "Mac に接続できています"; case .warning?: return "Mac に接続できましたが、注意が必要です"; case .failed?: return "Mac に接続できません"; case nil: return "接続を確認しています…" }
-    }
-    private var connectionDetail: String {
-        if !pageOnMac { return pageProblem ?? "Mac は使いません。ダウンロード済みのデータだけで動き、ページの文章は iPhone の外に出ません。" }
-        if macMissingButCovered { return "Mac で ./scripts/run_lan.sh を実行して QR を読み取ると、Mac のモデルも使えます（任意）。" }
-        if model.needsSetup { return "Mac で ./scripts/run_lan.sh を実行し、表示された QR を iPhone の「カメラ」で読み取ってください（初回だけ）。読み取れないときは、設定から文字列を貼り付けられます。" }
-        return model.connection?.message ?? "しばらくお待ちください。"
     }
 
     // MARK: paste and translate
@@ -217,7 +159,7 @@ struct HomeView: View {
     private var privacyNote: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("検索について", systemImage: "magnifyingglass").font(.footnote).bold()
-            Text("アドレス欄に語句を入力して検索すると、その語句が外部の検索サービス（\(AddressInput.searchServiceName)）に送られます。送る前に確認が出ます。ページ本文の翻訳は、Mac の中だけで処理されます。")
+            Text("アドレス欄に語句を入力して検索すると、その語句が外部の検索サービス（\(AddressInput.searchServiceName)）に送られます。送る前に確認が出ます。ページ本文の翻訳は、iPhone の中だけで処理されます。")
                 .font(.footnote).foregroundStyle(.secondary)
             Label("保存されるもの", systemImage: "internaldrive").font(.footnote).bold()
             Text("お気に入りと最近のサイトは、この iPhone にだけ保存されます。最近のサイトとタブの復元には、ログイン・メール・ネットバンキングなどを除いた公開ページの URL（検索条件や認証情報は含みません）だけが保存されます。")

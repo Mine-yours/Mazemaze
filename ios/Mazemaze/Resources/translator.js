@@ -10,7 +10,7 @@
   if (!bridge) return;
 
   // ---- constants ----------------------------------------------------------------------------
-  var CHUNK_TARGET = 160;            // one request is about one model call (the server batches ~150 chars per call)
+  var CHUNK_TARGET = 160;            // one request is about one model call (the engine batches ~150 chars per call)
   var MAX_SINGLE = 320;              // a single sentence longer than this is split at "、"; longer than this without one is skipped
   var MIN_JA_CHARS = 8;              // a block needs at least this many Japanese characters
   var MAX_REQUESTS_PER_PAGE = 1000;   // safety net only; the native side enforces the user-visible limit
@@ -216,7 +216,7 @@
   }
   function finishGroup(items, jaTotal) { return items.length && (jaTotal >= MIN_JA_CHARS || items[0].info.record) ? items : null; }
 
-  // Split the server's segments back over the items. English pieces are never split; the "\n"
+  // Split the returned segments back over the items. English pieces are never split; the "\n"
   // separators must come back as Japanese text. Returns null on any inconsistency.
   function distribute(segments, items) {
     var si = 0, off = 0;

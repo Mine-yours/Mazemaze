@@ -194,3 +194,13 @@ For each significant decision record: date, context, alternatives, choice, conse
 - **限界（正直に）**: 小さなオンデバイスモデルの訳は、固有名詞・慣用句・口語で誤る。誤りは「日本語のまま残る」ようには検出できない（意味の誤りは機械的に分からない）。原文に戻す（タップ）は常に使える。Apple 翻訳と実機での速さ・発熱は未測定。
 - **最終版での再測定（この Mac、Apple Intelligence）**: 評価データ 30 件に、アプリのエンジンと検証パイプラインをそのまま通した。置き換え候補 32 句がすべて採用され、エラー 0、**原文の保持は 30 件すべてで一致**、平均 2.6 秒/件（Mac の負荷で揺れる。iPhone は未測定）。
 - **2 回目のレビューで直したこと**: 設定が「Mac 未設定 + フォールバックだけ入ったまま」でも、iPhone 単体にしたら初回の設定画面や貼り付け画面が塞がれないようにした（判定は `EngineRules` に出してテスト）。Mac の確認が設定変更をまたいで古い答えを残さない（世代番号で破棄）。Mac が寝た直後に、解決済みの接続先の記憶（120 秒）で「到達できる」と誤判定しない（確認の前に必ず捨てる）。Apple 翻訳の部品は、システムが戻らなくても、取り消された・時間切れのジョブでループが止まらない（待ちを「ジョブが不要になった」合図と競わせる）。システムに中断され続けても 3 回で失敗として返す（待ち時間を伸ばしながら再試行）。
+
+## 2026-10-10 完全ローカル化（`main` を iPhone 単体版に）
+- **決定（所有者）**: 翻訳の質が Mac の Qwen3.5 9B より多少落ちても、目的は「英語を読むことに慣れる」ことなので、問題にしない。完全にローカル（iPhone の中）に舵を切る。Mac 版は残したまま、ブランチを分け、`main` を iPhone 単体版にする。変更が分かりやすいので、Mac 用のコードは `main` から削除する（案 B）。ページの翻訳の既定は Apple 翻訳、設定で選ぶ形は残す。音声（発音）は、端末の読み上げですでに iPhone の中だけで動く。
+- **ブランチ**: `mac-local-model` = `cef50de`（Mac 版 + iPhone 版が両方ある最後の状態。リモートにも置いた）。`main` は、その続きで Mac 用のものを削除した。
+- **削除したもの**: `backend/`（FastAPI、Ollama 連携、Python の選択・検証ロジック）、`frontend/`（Web UI）、`tests/`（pytest）、`eval/`（Ollama での評価環境と、評価用のエージェント）、`scripts/`（`run_lan.sh` など。`gen_ondevice_golden.py` を含む）、`requirements*.txt`、`pyproject.toml`、`.harness/`、`ios/scripts/fake_ollama.py`・`bench.sh`、アプリ側の通信（`URLSessionTransport`、ピン留め、`EndpointResolver`、`ConnectionChecker`）、ペアリング（`mazemaze://pair`、QR、確認画面）、Tailscale 用の ATS 例外と `NSLocalNetworkUsageDescription`、Keychain のトークン、`Bench`、設定・ホームの Mac の項目。
+- **残したもの・移したもの**: Python の選択・検証・表示整形・意味カードの検証を Swift に移したロジックと、その正解データ（`ondevice_golden.json`。再生成の方法は同じフォルダの `README.md`。生成にはブランチ `mac-local-model` が要る）。`TranslationService` は、エンジンだけを使う形に作り直した（直列の 1 枠、タブ別の世代、前面優先、意味は翻訳より先・保存した単語の裏の取得は最後、キャッシュ、世代違いの結果の破棄）。ページ側の `translator.js` は変えていない（エラーの種類は既存のものにそろえた: エンジンが使えない＝`not_configured`＝設定が直るまで停止、失敗＝`server`＝数回やり直して諦める）。
+- **意味カードの作成元の記録（`maker`）**: Mac と iPhone の両方があった間の表示のために入れたが、iPhone だけになったので削除した。注意書きは「AI（iPhone の Apple Intelligence）が作成」で固定。以前に Mac が作って保存したカードも、同じ文言になる（保存データは互換）。
+- **設定の移行**: 以前の「ページの翻訳: Mac」などの保存値は、読めないので既定（Apple 翻訳）に戻る。サーバー・トークン・ペアリングの保存値は使われなくなり、起動時に一度だけ消す（`LegacyCleanup`。Keychain のトークンは、アプリを削除しても残るため）。
+- **ATS**: 通信の例外は不要になったので、Info.plist から `NSAppTransportSecurity` を全部外した。試験用の `http://localhost` のページは、シミュレータの自己テストで問題なく読み込めることを確認した（ATS はローカルホストを止めない）。
+- **試験の作り直し**: Mac 前提のテスト（ペアリング、ピン留め、接続先の選択、通信の遮断器、`/api/define`、Tailscale）は、機能ごと無くなった。サービスの試験（直列・キャッシュ・世代・タブ別・優先順位・意味）は、偽エンジンで書き直した。自己テストは、固定の答えを返す偽エンジンを常に使う（`-MazemazeFakeEngines 1`）。

@@ -1,87 +1,26 @@
 import Foundation
 
-public protocol SecretStore: Sendable {
-    func token() -> String?
-    func setToken(_ token: String?) throws
-}
-
-public final class InMemorySecretStore: SecretStore, @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: String?
-    public init(token: String? = nil) { value = token }
-    public func token() -> String? { lock.lock(); defer { lock.unlock() }; return value }
-    public func setToken(_ token: String?) throws { lock.lock(); defer { lock.unlock() }; value = token }
-}
-
-public struct ServerConfig: Equatable, Sendable {
-    public var baseURL: URL
-    public var token: String?
-    /// Tried when `baseURL` (usually a `.local` name) cannot be reached: the Mac's IP address.
-    public var fallbackURL: URL?
-    /// SHA-256 of the certificate the server must present (https only). Nil: no pinning.
-    public var pinnedFingerprint: String?
-    /// Tried last, away from home: the Mac's address on the owner's Tailscale network (https + pinned only).
-    public var tailscaleURL: URL?
-    public init(baseURL: URL, token: String?, fallbackURL: URL? = nil, pinnedFingerprint: String? = nil, tailscaleURL: URL? = nil) {
-        self.baseURL = baseURL; self.token = token; self.fallbackURL = fallbackURL; self.pinnedFingerprint = pinnedFingerprint
-        self.tailscaleURL = tailscaleURL
-    }
-    public var candidates: [URL] { [baseURL] + (fallbackURL.map { [$0] } ?? []) + (tailscaleURL.map { [$0] } ?? []) }
-}
-
-/// Non-secret preferences live in UserDefaults; the token lives only in the SecretStore (Keychain).
+/// Preferences live in UserDefaults (this iPhone only; there is no account, no token and no server).
 public final class SettingsStore: @unchecked Sendable {
     private let defaults: UserDefaults
-    private let secrets: SecretStore
     enum Key {
-        static let serverURL = "mazemaze.serverURL"
         static let ratio = "mazemaze.ratio"
         static let unit = "mazemaze.unit"
         static let enabled = "mazemaze.enabled"
         static let hosts = "mazemaze.allowedHosts"
-        static let fallbackURL = "mazemaze.fallbackURL"
-        static let tailscaleURL = "mazemaze.tailscaleURL"
-        static let pin = "mazemaze.pin"
-        static let serverName = "mazemaze.serverName"
         static let restoreTabs = "mazemaze.restoreTabs"
         static let safariIdentityForX = "mazemaze.safariIdentityForX"
         static let autoHideBars = "mazemaze.autoHideBars"
         static let embedDictionary = "mazemaze.embedDictionary"
         static let autoMeaning = "mazemaze.autoMeaning"
         static let translationEngine = "mazemaze.engine.translation"
-        static let meaningEngine = "mazemaze.engine.meaning"
-        static let fallbackToDevice = "mazemaze.engine.fallbackToDevice"
-        static let deviceTranslation = "mazemaze.engine.deviceTranslation"
         static let embedDictionaryCrashed = "mazemaze.embedDictionaryCrashed"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
     }
 
-    public init(defaults: UserDefaults = .standard, secrets: SecretStore) {
+    public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.secrets = secrets
-    }
-
-    public var serverURLString: String {
-        get { defaults.string(forKey: Key.serverURL) ?? "" }
-        set { defaults.set(newValue, forKey: Key.serverURL) }
-    }
-    public var fallbackURLString: String {
-        get { defaults.string(forKey: Key.fallbackURL) ?? "" }
-        set { defaults.set(newValue, forKey: Key.fallbackURL) }
-    }
-    public var pinnedFingerprint: String? {
-        get { defaults.string(forKey: Key.pin).flatMap(PinEvaluator.normalizeFingerprint) }
-        set { defaults.set(newValue.flatMap(PinEvaluator.normalizeFingerprint), forKey: Key.pin) }
-    }
-    public var serverName: String {
-        get { defaults.string(forKey: Key.serverName) ?? "" }
-        set { defaults.set(newValue, forKey: Key.serverName) }
-    }
-    public var token: String? { secrets.token() }
-    public func setToken(_ t: String?) throws {
-        let trimmed = t?.trimmingCharacters(in: .whitespacesAndNewlines)
-        try secrets.setToken((trimmed?.isEmpty ?? true) ? nil : trimmed)
     }
 
     public var ratio: Double {
@@ -103,29 +42,10 @@ public final class SettingsStore: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
     }
 
-    /// Which engine translates and which makes word meanings: the Mac (default, as before) or the iPhone itself.
+    /// Which engine translates pages (Apple Translation by default). Both run inside the iPhone.
     public var translationEngine: TranslationEngineKind {
-        get { defaults.string(forKey: Key.translationEngine).flatMap(TranslationEngineKind.init(rawValue:)) ?? .mac }
+        get { defaults.string(forKey: Key.translationEngine).flatMap(TranslationEngineKind.init(rawValue:)) ?? .appleTranslation }
         set { defaults.set(newValue.rawValue, forKey: Key.translationEngine) }
-    }
-    public var meaningEngine: MeaningEngineKind {
-        get { defaults.string(forKey: Key.meaningEngine).flatMap(MeaningEngineKind.init(rawValue:)) ?? .mac }
-        set { defaults.set(newValue.rawValue, forKey: Key.meaningEngine) }
-    }
-    /// Use the iPhone's own engine when the Mac cannot be reached (off by default).
-    public var fallbackToDevice: Bool {
-        get { defaults.object(forKey: Key.fallbackToDevice) as? Bool ?? false }
-        set { defaults.set(newValue, forKey: Key.fallbackToDevice) }
-    }
-    /// The iPhone engine that takes over when the Mac cannot be reached (translation). Never `.mac`.
-    public var deviceTranslation: TranslationEngineKind {
-        get { defaults.string(forKey: Key.deviceTranslation).flatMap(TranslationEngineKind.init(rawValue:)).flatMap { $0.runsOnDevice ? $0 : nil } ?? .appleTranslation }
-        set { defaults.set((newValue.runsOnDevice ? newValue : .appleTranslation).rawValue, forKey: Key.deviceTranslation) }
-    }
-    public var enginePrefs: EnginePrefs {
-        var p = EnginePrefs()
-        p.translation = translationEngine; p.meaning = meaningEngine; p.fallbackToDevice = fallbackToDevice; p.deviceTranslation = deviceTranslation
-        return p
     }
 
     /// A word saved from the iPhone's dictionary gets its meaning looked up in the background (on by default).
@@ -165,52 +85,12 @@ public final class SettingsStore: @unchecked Sendable {
         set { if let newValue { defaults.set(newValue, forKey: Key.tabs) } else { defaults.removeObject(forKey: Key.tabs) } }
     }
     public var userDefaults: UserDefaults { defaults }
-    public var tailscaleURLString: String {
-        get { defaults.string(forKey: Key.tailscaleURL) ?? "" }
-        set { defaults.set(newValue, forKey: Key.tailscaleURL) }
-    }
     /// Ask the system to write preferences to disk now (they are normally written a little later, and a
-    /// force-quit right after a change could lose it). Called after pairing, tab and bookmark changes.
+    /// force-quit right after a change could lose it). Called after tab and bookmark changes.
     public func flush() { defaults.synchronize() }
 
     public var allowedHosts: [String] {
         get { (defaults.array(forKey: Key.hosts) as? [String]).map { $0.compactMap(SitePolicy.normalizeEntry) } ?? SitePolicy.defaultAllowedHosts }
         set { defaults.set(newValue.compactMap(SitePolicy.normalizeEntry), forKey: Key.hosts) }
-    }
-
-    /// The validated server configuration, or nil if the URL is missing or not a local address.
-    public func serverConfig() -> ServerConfig? {
-        guard case .success(let url) = LocalHostPolicy.validate(serverURLString) else { return nil }
-        let pin = pinnedFingerprint
-        // A pinned server must be reached over https; never fall back to plain http (a downgrade).
-        if pin != nil, url.scheme != "https" { return nil }
-        // The IP-address fallback is only ever used after that address answered like a Mazemaze server
-        // (EndpointResolver); with a pinned certificate the certificate is checked as well.
-        var fallback: URL?
-        if case .success(let f) = LocalHostPolicy.validate(fallbackURLString), f.scheme == url.scheme { fallback = f }
-        // The Tailscale address is only used with a pinned https server (it is reached over other people's networks).
-        var tailscale: URL?
-        if pin != nil, url.scheme == "https", case .success(let t) = LocalHostPolicy.validateTailscale(tailscaleURLString), t.scheme == "https" { tailscale = t }
-        return ServerConfig(baseURL: url, token: token, fallbackURL: fallback, pinnedFingerprint: pin, tailscaleURL: tailscale)
-    }
-
-    /// Store a confirmed pairing: address(es), fingerprint and token together (the token goes to the Keychain).
-    public func apply(_ pairing: PairingPayload) throws {
-        let previous = (serverURLString, fallbackURLString, pinnedFingerprint, serverName, secrets.token(), tailscaleURLString)
-        do {
-            try secrets.setToken(pairing.token)
-        } catch { throw error }
-        serverURLString = pairing.primaryURL.absoluteString
-        fallbackURLString = pairing.fallbackURL?.absoluteString ?? ""
-        tailscaleURLString = pairing.tailscaleURL?.absoluteString ?? ""
-        pinnedFingerprint = pairing.fingerprint
-        serverName = pairing.name ?? pairing.host ?? ""
-        defer { flush() }
-        if serverConfig() == nil {              // refuse a combination the app would not accept
-            serverURLString = previous.0; fallbackURLString = previous.1; pinnedFingerprint = previous.2; serverName = previous.3
-            tailscaleURLString = previous.5
-            try? secrets.setToken(previous.4)
-            throw PairingError.invalid("h")
-        }
     }
 }

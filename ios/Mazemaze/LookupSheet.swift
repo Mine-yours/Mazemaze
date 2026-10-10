@@ -5,7 +5,7 @@ import MazemazeCore
 
 /// Where a lookup came from, and what saving it should do.
 struct LookupSession: Identifiable, Equatable {
-    /// What the sheet shows first. A word starts with the iPhone's own dictionary (instant, offline); the Mac's model
+    /// What the sheet shows first. A word starts with the iPhone's own dictionary (instant, offline); the on-device model
     /// ("この文での意味") only runs when asked for. A phrase has no dictionary, so it starts with the model's answer.
     enum Mode: Equatable { case dictionary, ai }
 
@@ -18,7 +18,7 @@ struct LookupSession: Identifiable, Equatable {
 }
 
 /// The half-height sheet with the meaning of a word (in the sentence it was read in) or of the whole phrase.
-/// The card is made by the local model on the Mac and is shown as AI-made.
+/// The card is made by the on-device model (Apple Intelligence) and is shown as AI-made.
 struct LookupSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -89,13 +89,13 @@ struct LookupSheet: View {
         #if DEBUG
         .task { if SelfTest.value("-MazemazeOpenDictionary") == "1" { try? await Task.sleep(nanoseconds: 3_000_000_000); showSystemDictionary = true } }      // screenshots
         #endif
-        // The Mac is only asked when the model's answer is what is on screen.
+        // The model is only asked when its answer is what is on screen.
         .task(id: "\(request.id)|\(showsDictionary)") {
             if showsDictionary { detent = embedsDictionary ? .large : .medium } else { detent = .medium; await load() }
         }
     }
 
-    /// The word, the sentence it was read in (above), and one tap to the iPhone's dictionary. No network, no Mac.
+    /// The word, the sentence it was read in (above), and one tap to the iPhone's dictionary. No network.
     private var dictionaryPane: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.settings.embedDictionaryCrashed {
@@ -175,12 +175,9 @@ struct LookupSheet: View {
         }
     }
 
-    /// Under the card: who made it (the engine that was used, not just the one chosen now).
+    /// Under the card.
     private var aiNotice: String {
-        var who = "AI が"
-        if case .loaded(let card) = state { who = "AI（\(card.makerName)）が" }
-        else { who = "AI（\(model.meaningEngine == .mac ? "Mac のローカルモデル" : "iPhone の Apple Intelligence")）が" }
-        return who + "作成した説明です。誤りがあるかもしれないので、気になるときは「標準辞書」でも確認してください。"
+        "AI（iPhone の Apple Intelligence）が作成した説明です。誤りがあるかもしれないので、気になるときは「標準辞書」でも確認してください。"
     }
 
     // MARK: content
@@ -267,7 +264,7 @@ struct LookupSheet: View {
         case .failure(let f):
             if f != .cancelled { state = .failed(f) }
         case .more:
-            state = .failed(.invalidResponse)
+            state = .failed(.failed("もう一度お試しください"))
         }
     }
 
@@ -290,7 +287,7 @@ struct LookupSheet: View {
         case .failure(let f):
             if f != .cancelled { more = .failed(f) }
         case .success:
-            more = .failed(.invalidResponse)
+            more = .failed(.failed("もう一度お試しください"))
         }
     }
 

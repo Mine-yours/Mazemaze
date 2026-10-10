@@ -65,7 +65,7 @@ public enum OnDeviceTranslator {
             display = DisplayFormat.segments(t, segments)
         }
         let out = display.map { TranslatedSegment(kind: $0.kind == .en ? .en : .ja, source: $0.source, display: $0.display) }
-        // The same check the app applies to the Mac's answer: the pieces rebuild exactly the text that was asked about.
+        // The final check: the pieces rebuild exactly the text that was asked about.
         guard Array(out.map(\.source).joined().unicodeScalars) == t else { throw EngineError.failed("原文を保持できなかったため、変換しませんでした") }
         return Result(segments: out, requestedSpans: selection.spans.count, failedBatches: failed)
     }

@@ -1,50 +1,6 @@
 import XCTest
 @testable import MazemazeCore
 
-final class LocalHostPolicyTests: XCTestCase {
-    func ok(_ s: String, file: StaticString = #filePath, line: UInt = #line) {
-        if case .failure(let e) = LocalHostPolicy.validate(s) { XCTFail("\(s) rejected: \(e)", file: file, line: line) }
-    }
-    func no(_ s: String, file: StaticString = #filePath, line: UInt = #line) {
-        if case .success(let u) = LocalHostPolicy.validate(s) { XCTFail("\(s) accepted as \(u)", file: file, line: line) }
-    }
-
-    func testAllowed() {
-        for s in ["http://192.168.0.19:8000", "http://10.0.0.1", "http://10.255.255.255:1", "http://172.16.0.1", "http://172.31.255.255",
-                  "http://127.0.0.1:8000", "http://localhost:8000", "http://[::1]:8000", "http://my-mac.local:8000",
-                  "http://MY-MAC.LOCAL:8000", "https://192.168.1.2", "http://192.168.0.19:8000/", "HTTP://192.168.0.19"] { ok(s) }
-    }
-    func testBoundaries() {
-        for s in ["http://172.15.255.255", "http://172.32.0.1", "http://192.167.1.1", "http://192.169.1.1", "http://11.0.0.1",
-                  "http://9.255.255.255", "http://100.64.0.1", "http://169.254.169.254", "http://0.0.0.0", "http://255.255.255.255"] { no(s) }
-    }
-    func testNumericAndAmbiguousHosts() {
-        for s in ["http://2130706433/", "http://0x7f000001/", "http://0177.0.0.1/", "http://127.1/", "http://192.168.1/",
-                  "http://3232235777/", "http://192.168.001.001", "http://192.168.0.256", "http://1.2.3.4.5"] { no(s) }
-    }
-    func testSpoofing() {
-        for s in ["http://192.168.1.5@evil.com/", "http://evil.com@192.168.1.5/", "http://user:pw@localhost/",
-                  "http://192.168.1.5.evil.com", "http://localhost.evil.com", "http://evil.com#@192.168.1.5",
-                  "http://evil.com\\@192.168.1.5", "http://127.0.0.1.nip.io", "http://my-mac.local.evil.com",
-                  "http://x.local.com", "http://.local", "http://a..local", "http://my-mac.local.", "http://-a.local"] { no(s) }
-    }
-    func testIPv6() {
-        for s in ["http://[::ffff:8.8.8.8]", "http://[::ffff:192.168.1.5]", "http://[fe80::1%25en0]", "http://[fc00::1]", "http://[::]", "http://[2001:db8::1]"] { no(s) }
-    }
-    func testUnicodeAndSchemes() {
-        for s in ["http://ｌｏｃａｌｈｏｓｔ/", "http://ｌ.local", "http://xn--a.local", "ftp://192.168.0.1", "file:///etc/passwd", "javascript:alert(1)",
-                  "192.168.0.1:8000", "", " http://192.168.0.1", "http://192.168.0.1 ", "http://192.168.0.1\n", "http://192.168.0.1/\u{0}"] { no(s) }
-    }
-    func testPortsAndPaths() {
-        for s in ["http://192.168.0.1:0", "http://192.168.0.1:65536", "http://192.168.0.1:abc", "http://192.168.0.1/api", "http://192.168.0.1/?a=1", "http://192.168.0.1/#x"] { no(s) }
-        ok("http://192.168.0.1:65535")
-    }
-    func testNormalizedOutput() {
-        guard case .success(let u) = LocalHostPolicy.validate("HTTP://My-Mac.LOCAL:8000/") else { return XCTFail() }
-        XCTAssertEqual(u.absoluteString, "http://my-mac.local:8000")
-    }
-}
-
 final class SitePolicyTests: XCTestCase {
     let policy = SitePolicy()
     func allowed(_ s: String) -> Bool { policy.decision(for: URL(string: s)).isAllowed }

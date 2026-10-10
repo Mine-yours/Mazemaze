@@ -4,18 +4,10 @@ import MazemazeCore
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var serverURL = ""
-    @State private var token = ""
-    @State private var report: ConnectionReport?
-    @State private var checking = false
     @State private var newHost = ""
     @State private var hostError: String?
-    @State private var saveError: String?
     @State private var ratioDraft = 0.3
     @State private var ratioCommit: Task<Void, Never>?
-    @State private var showToken = false
-    @State private var loadedURL = ""          // what the fields showed when the sheet opened: only a real edit counts as a change
-    @State private var loadedToken = ""
     @State private var confirmClear = false
     @State private var xIdentity = true
     @State private var autoHideBars = true
@@ -25,60 +17,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("いちばん簡単な方法（QR）").font(.subheadline).bold()
-                        Text("Mac で ./scripts/run_lan.sh を実行すると、ターミナルに QR が表示されます。iPhone の標準「カメラ」アプリで読み取り、出てきた通知をタップして、確認画面で「ペアリングする」を押すだけです。QR は画面から直接読み取るので、Wi-Fi 上でトークンが漏れません。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    PasteButton(payloadType: String.self) { strings in
-                        if let text = strings.first { Task { @MainActor in model.receivePairing(text) } }
-                    }
-                    .labelStyle(.titleAndIcon).frame(minHeight: 44)
-                    Text("Mac に表示された「mazemaze://pair?…」の 1 行をコピーしてから、上のボタンを押します（iPhone が貼り付けの許可を聞くことがあります）。").font(.caption).foregroundStyle(.secondary)
-                    if let name = pairedSummary { Label(name, systemImage: model.settings.pinnedFingerprint != nil ? "lock.fill" : "lock.open").font(.footnote).foregroundStyle(model.settings.pinnedFingerprint != nil ? Color.green : Color.orange) }
-                } header: { Text("ペアリング") }
-
-                Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("手入力する場合（暗号化なしの HTTP のみ）").font(.subheadline).bold()
-                        Text("手入力では、暗号化（証明書の確認）は使えません。できるだけ上の QR か貼り付けを使ってください。手入力するときは、Mac を MAZEMAZE_TLS=0 ./scripts/run_lan.sh で起動し、表示された http:// の URL とトークンを入力して「保存して接続確認」を押します（ローカルネットワークの許可が出たら「許可」し、もう一度押します）。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    LabeledContent("URL") {
-                        TextField("例: http://192.168.0.19:8000", text: $serverURL)
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                            .accessibilityLabel("サーバーの URL")
-                    }
-                    LabeledContent("トークン") {
-                        HStack {
-                            Group {
-                                if showToken { TextField("Mac に表示された文字列", text: $token) } else { SecureField("Mac に表示された文字列", text: $token) }
-                            }
-                            .multilineTextAlignment(.trailing)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                            .accessibilityLabel("アクセストークン")
-                            Button { showToken.toggle() } label: { Image(systemName: showToken ? "eye.slash" : "eye").frame(minWidth: 44, minHeight: 44) }
-                                .buttonStyle(.borderless).accessibilityLabel(showToken ? "トークンを隠す" : "トークンを表示")
-                        }
-                    }
-                    Button {
-                        Task { await check() }
-                    } label: {
-                        HStack { Text("保存して接続確認"); if checking { Spacer(); ProgressView() } }
-                    }
-                    .disabled(checking)
-                    if let r = report {
-                        Label(r.message, systemImage: r.state == .ok ? "checkmark.circle.fill" : (r.state == .warning ? "exclamationmark.triangle.fill" : "xmark.octagon.fill"))
-                            .foregroundStyle(r.state == .ok ? .green : (r.state == .warning ? .orange : .red))
-                            .font(.footnote)
-                    }
-                    if let e = saveError { Text(e).font(.footnote).foregroundStyle(.red) }
-                } header: { Text("翻訳サーバー（Mac）") } footer: {
-                    Text("接続先は Mac / ローカルネットワークのアドレスのみ入力できます。トークンはこの iPhone のキーチェーンにだけ保存され、閲覧中のページには渡されません。初回の接続時に「ローカルネットワーク」の許可を求められたら許可してください。\(model.settings.pinnedFingerprint != nil ? "いまの接続は暗号化されています。" : "いまの接続は暗号化されていません（HTTP）。自宅など信頼できる Wi-Fi でだけ使ってください。")")
-                }
-
                 Section {
                     Toggle("スクロールでバーを隠す", isOn: $autoHideBars)
                         .onChange(of: autoHideBars) { v in model.settings.autoHideBars = v; model.settings.flush(); if !v { model.active.revealBars() } }
@@ -99,7 +37,7 @@ struct SettingsView: View {
                     Toggle("保存した単語の意味を、裏で自動で調べる", isOn: $autoMeaning)
                         .onChange(of: autoMeaning) { v in model.settings.autoMeaning = v; model.settings.flush(); if v { model.startMeaningWorker() } }
                 } footer: {
-                    Text("標準辞書から単語を保存すると、「単語・句の意味」で選んだ方法（Mac のモデルか iPhone の Apple Intelligence）が、その文での意味を調べて項目に入れます。翻訳を優先するため、しばらく翻訳がない間に、1 件ずつ調べます。使えないときは、あとで自動でやり直します。")
+                    Text("標準辞書から単語を保存すると、iPhone の Apple Intelligence が、その文での意味を調べて項目に入れます。翻訳を優先するため、しばらく翻訳がない間に、1 件ずつ調べます。使えないときは、あとで自動でやり直します。")
                 }
 
                 Section {
@@ -107,35 +45,22 @@ struct SettingsView: View {
                         ForEach(TranslationEngineKind.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     Text(model.translationEngine.hint).font(.footnote).foregroundStyle(.secondary)
-                    if model.translationEngine == .appleTranslation || (model.fallbackToDevice && model.deviceTranslation == .appleTranslation) {
+                    if model.translationEngine == .appleTranslation {
                         Label("Apple 翻訳: \(model.appleTranslationStatus)", systemImage: model.appleTranslationInstalled ? "checkmark.circle" : "arrow.down.circle")
                             .font(.footnote).foregroundStyle(model.appleTranslationInstalled ? Color.green : Color.orange)
                         if model.appleTranslationCanDownload {
                             Button("翻訳データをダウンロード（システムの確認が出ます）") { model.requestAppleTranslationDownload() }.frame(minHeight: 44)
                         }
                     }
-                    Picker("単語・句の意味", selection: $model.meaningEngine) {
-                        ForEach(MeaningEngineKind.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    Text(model.meaningEngine.hint).font(.footnote).foregroundStyle(.secondary)
-                    if model.translationEngine == .foundationModels || model.meaningEngine == .foundationModels || (model.fallbackToDevice && model.deviceTranslation == .foundationModels) {
-                        if let problem = model.foundationModelsProblem {
-                            Label("Apple Intelligence: \(problem)", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
-                        } else {
-                            Label("Apple Intelligence: 使えます", systemImage: "checkmark.circle").font(.footnote).foregroundStyle(.green)
-                        }
-                    }
-                    if model.usesMac || model.fallbackToDevice {
-                        Toggle("Mac に繋がらないとき、iPhone で代わりに処理する", isOn: $model.fallbackToDevice)
-                        if model.fallbackToDevice {
-                            Picker("そのときの翻訳", selection: $model.deviceTranslation) {
-                                ForEach(TranslationEngineKind.allCases.filter(\.runsOnDevice), id: \.self) { Text($0.title).tag($0) }
-                            }
-                            Text("そのときの単語の意味は、Apple Intelligence が作ります。").font(.footnote).foregroundStyle(.secondary)
-                        }
+                    LabeledContent("単語・句の意味") { Text("Apple Intelligence") }
+                    Text("単語をタップしたときの「この文での意味（AI）」と、保存した単語の意味の自動検索を作ります。標準辞書は別で、いつでも使えます。").font(.footnote).foregroundStyle(.secondary)
+                    if let problem = model.foundationModelsProblem {
+                        Label("Apple Intelligence: \(problem)", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                    } else {
+                        Label("Apple Intelligence: 使えます", systemImage: "checkmark.circle").font(.footnote).foregroundStyle(.green)
                     }
                 } header: { Text("翻訳と意味の作り方") } footer: {
-                    Text("iPhone を選んだ処理は、ダウンロード済みのデータだけで動き、その文章は iPhone の外に出ません（Apple 翻訳のデータを取るときだけ通信します）。Mac を選んだ処理の文章は Mac に送られます。置き換える場所の選び方・原文の保持・検査は、どの方法でも同じです。")
+                    Text("どちらも iPhone の中だけで処理し、文章は通信しません（Apple 翻訳のデータをダウンロードするときだけ通信します）。置き換える場所の選び方・原文の保持・検査は、どちらを選んでも同じです。")
                 }
 
                 Section("翻訳") {
@@ -176,7 +101,7 @@ struct SettingsView: View {
                     Toggle("X を Safari として開く", isOn: $xIdentity)
                         .onChange(of: xIdentity) { v in model.settings.safariIdentityForX = v; model.settings.flush() }
                 } header: { Text("翻訳するサイト") } footer: {
-                    Text("ここに登録したサイト（https のみ）だけ、本文を翻訳します（「翻訳と意味の作り方」で選んだ方法で。Mac を選んだときは Mac に送ります）。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。\n「X を Safari として開く」: X は、アプリ内ブラウザを Safari に誘導します。オンの間は、x.com / twitter.com に限り、Safari と同じ形式の UA を送り、Safari が持つ 2 つの目印（SchemaDataExtractor / MicrodataExtractor）を空の値で用意します。他のサイトには何もしません。オフにすると X は Safari へ誘導されます。変更は新しいタブから有効です。")
+                    Text("ここに登録したサイト（https のみ）だけ、本文を翻訳します（iPhone の中で処理します）。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。\n「X を Safari として開く」: X は、アプリ内ブラウザを Safari に誘導します。オンの間は、x.com / twitter.com に限り、Safari と同じ形式の UA を送り、Safari が持つ 2 つの目印（SchemaDataExtractor / MicrodataExtractor）を空の値で用意します。他のサイトには何もしません。オフにすると X は Safari へ誘導されます。変更は新しいタブから有効です。")
                 }
 
                 Section {
@@ -192,17 +117,14 @@ struct SettingsView: View {
                 }
 
                 Section("注意") {
-                    Text("\(model.settings.pinnedFingerprint != nil ? "Mac との通信は暗号化されています（ペアリングした証明書と同じ Mac にだけ接続します）。" : "Mac との通信は HTTP（暗号化なし）です。自宅など信頼できる Wi-Fi でだけ使ってください。")「Mac」を選んだ処理の文章は、このアプリから Mac のサーバーにだけ送られ、Mac 上の Ollama（ローカルモデル）で処理されます（インターネット上のサービスには送りません）。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
+                    Text("翻訳する文章は、この iPhone の中だけで処理され、外部のサーバーには送られません。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
                         .font(.footnote)
                 }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { save(); dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { dismiss() } } }
             .onAppear {
-                serverURL = model.settings.serverURLString
-                token = model.settings.token ?? ""
-                loadedURL = serverURL; loadedToken = token
                 ratioDraft = model.ratio
                 xIdentity = model.settings.safariIdentityForX
                 autoHideBars = model.settings.autoHideBars
@@ -210,55 +132,8 @@ struct SettingsView: View {
                 autoMeaning = model.settings.autoMeaning
                 model.refreshEngineStatus()
             }
-            .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft }; save() }
+            .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft } }
         }
-    }
-
-    private var pairedSummary: String? {
-        guard let cfg = model.settings.serverConfig() else { return nil }
-        let name = model.settings.serverName.isEmpty ? (cfg.baseURL.host ?? "Mac") : model.settings.serverName
-        return cfg.pinnedFingerprint != nil ? "\(name) とペアリング済み（暗号化あり・証明書で確認）" : "\(name) に接続設定済み（暗号化なし・HTTP）"
-    }
-
-    private func save() {
-        saveError = nil
-        // Only what the person typed counts. If a pairing was applied while this sheet was open, the
-        // fields still show the old values and must not overwrite it.
-        guard serverURL != loadedURL || token != loadedToken else { return }
-        let newURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        var changed = false
-        if newURL != loadedURL {
-            // A half-typed or invalid address must not wipe a working pairing.
-            guard newURL.isEmpty || { if case .success = LocalHostPolicy.validate(newURL) { return true } else { return false } }() else {
-                saveError = "このアドレスは保存できません。Mac / ローカルネットワークの http(s):// のアドレス（例: http://192.168.0.19:8000）を入力してください。"
-                return
-            }
-            if newURL != model.settings.serverURLString {          // typed by hand: the paired certificate / fallback no longer apply
-                model.settings.pinnedFingerprint = nil
-                model.settings.fallbackURLString = ""
-                model.settings.tailscaleURLString = ""
-                model.settings.serverName = ""
-                model.settings.serverURLString = newURL
-                changed = true
-            }
-            loadedURL = serverURL
-        }
-        if newToken != loadedToken {
-            if newToken != (model.settings.token ?? "") {
-                do { try model.settings.setToken(newToken); changed = true; loadedToken = token }
-                catch { saveError = "トークンをキーチェーンに保存できませんでした（もう一度「保存して接続確認」を押してください）" }
-            } else { loadedToken = token }
-        }
-        if changed { model.settings.flush(); model.serverSettingsChanged() }      // only then: it resets the page and the cache
-    }
-
-    private func check() async {
-        checking = true
-        save()
-        report = await model.checkConnection()
-        checking = false
-        if report?.state == .ok { model.active.recoverIfNeeded(); model.warmupIfNeeded() }
     }
 
     private func addHost() {

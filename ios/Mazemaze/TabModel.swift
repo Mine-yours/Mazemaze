@@ -42,7 +42,7 @@ final class TabModel: ObservableObject, Identifiable {
     @Published var failCount = 0
     @Published var lastProblem: String? { didSet { if lastProblem != nil { revealBars() } } }   // needs the user to do something (red)
     @Published var problemAction: ProblemAction?
-    @Published var notice: String? { didSet { if notice != nil { revealBars() } } }   // recovers by itself (orange): Mac busy, paused
+    @Published var notice: String? { didSet { if notice != nil { revealBars() } } }   // recovers by itself (orange)
     @Published private(set) var webView: WKWebView?
     @Published private(set) var restoreURL: URL?     // where a sleeping tab continues
     @Published var restoredTitle: String?
@@ -172,7 +172,7 @@ final class TabModel: ObservableObject, Identifiable {
             enabled = app.translationEnabled && !suspendedForPage && app.translationAvailable
             if !app.translationEnabled { siteStatus = "翻訳: オフ" }
             else if suspendedForPage { siteStatus = "翻訳: このページは原文表示" }
-            else if !app.translationAvailable { siteStatus = "翻訳: サーバー未設定（設定で入力）" }
+            else if !app.translationAvailable { siteStatus = "翻訳: この iPhone では使えません（設定で翻訳の方法を確認）" }
             else { siteStatus = "翻訳: オン" }
         case .denied(let reason):
             siteStatus = "翻訳しないページ: \(reason)"
@@ -195,26 +195,12 @@ final class TabModel: ObservableObject, Identifiable {
             switch f {
             case .stale, .cancelled:
                 break
-            case .busy:
-                notice = "Mac が他の翻訳を処理中です。空き次第、自動で続きます"
-            case .breakerOpen(let secs):
-                let detail = await app.service.lastErrorDetail
-                notice = "翻訳サーバーのエラーが続いたため、約 \(secs) 秒お待ちください（自動で再開します）" + (detail.map { "［\($0)］" } ?? "")
             default:
                 failCount += 1
-                let detail = await app.service.lastErrorDetail
-                var text = f.message
+                lastProblem = f.message
                 switch f {
-                case .unreachable, .timeout, .server, .invalidResponse:
-                    if let c = app.settings.serverConfig() {
-                        text += "（接続先: \(c.baseURL.host ?? "?"):\(c.baseURL.port ?? 80)\(detail.map { "・" + $0 } ?? "")）"
-                    }
-                default: break
-                }
-                lastProblem = text
-                switch f {
-                case .unauthorized, .notConfigured, .unreachable, .pinMismatch, .certificateUntrusted, .deviceUnavailable: problemAction = .openSettings
-                case .deviceFailed: problemAction = .reload
+                case .unavailable: problemAction = .openSettings
+                case .failed: problemAction = .reload
                 default: problemAction = nil
                 }
                 siteStatus = "翻訳: エラー"
@@ -234,9 +220,9 @@ final class TabModel: ObservableObject, Identifiable {
 
     func resetCounters() { okCount = 0; failCount = 0; lastProblem = nil; problemAction = nil; notice = nil }
 
-    /// Back in the foreground (or the connection check succeeded): forget past failures and start over.
+    /// Back in the foreground (or the settings were fixed): forget past failures and start over.
     func recoverIfNeeded() {
-        // Only for trouble that a fresh start can fix (connection / settings), not for page-load errors.
+        // Only for trouble that a fresh start can fix (the engine was not ready / the settings), not for page-load errors.
         guard problemAction == .openSettings || notice != nil else { return }
         Task {
             await app.service.clearFailures()

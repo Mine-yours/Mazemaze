@@ -11,7 +11,6 @@ struct MazemazeApp: App {
                 .onOpenURL { url in
                     // mazemaze://paste only opens the paste screen (no text travels in the URL; the person pastes it).
                     if url.scheme?.lowercased() == "mazemaze", url.host?.lowercased() == "paste", url.query == nil { model.openPaste() }
-                    else { model.receivePairing(url.absoluteString) }     // mazemaze://pair?… from the Camera app
                 }
         }
     }

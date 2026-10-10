@@ -46,7 +46,6 @@ public enum SessionPrivacy {
     static func isPublicHostName(_ host: String) -> Bool {
         guard host.unicodeScalars.allSatisfy({ $0.isASCII }), host.contains("."), host.count <= 253 else { return false }
         if host == "localhost" || host.contains(":") { return false }
-        if LocalHostPolicy.canonicalIPv4(host) != nil { return false }
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
         // An all-numeric name is an (odd) IP address.
         if labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0 >= "0" && $0 <= "9" } }) { return false }

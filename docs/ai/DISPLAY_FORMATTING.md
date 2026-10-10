@@ -1,3 +1,5 @@
+> **実装**: Swift の `DisplayFormat`（`ios/MazemazeCore/.../OnDevice/DisplayFormat.swift`）。元の Python 実装（ブランチ `mac-local-model` の `backend/display.py`）との一致は、正解データで確認している。
+
 # 英訳スパンの表示整形（`backend/display.py`）
 
 ## 目的

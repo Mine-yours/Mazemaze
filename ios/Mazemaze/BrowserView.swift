@@ -3,8 +3,8 @@ import WebKit
 import MazemazeCore
 
 /// WKWebView wrapper. The translation script and its message handler live in a private
-/// WKContentWorld, so scripts of the visited site can neither see nor call them. All network
-/// access (and the token) stays on the Swift side.
+/// WKContentWorld, so scripts of the visited site can neither see nor call them. Page text only
+/// ever goes to the on-device engines, from the Swift side.
 /// Shows the web view that belongs to a tab. The web view lives in the tab (not in this view), so
 /// switching tabs never reloads a page.
 struct BrowserView: UIViewControllerRepresentable {
@@ -85,14 +85,8 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
         bindModel(web)
         if tab.kind == .paste { loadPasteTemplate(web); return web }
         #if DEBUG
-        // The self-test and the benchmark drive the first web view only; later tabs are ordinary.
+        // The self-test drives the first web view only; later tabs are ordinary.
         if SelfTest.isActive, !SelfTest.hasStarted { SelfTest.hasStarted = true; SelfTest.start(web: web, coordinator: self, app: app); return web }
-        if Bench.isActive, !Bench.hasStarted {
-            Bench.hasStarted = true
-            if let u = initialURL { web.load(URLRequest(url: u)) }
-            Bench.start(web: web, app: app)
-            return web
-        }
         #endif
         if let initialURL {
             lastUserRequestedURL = initialURL

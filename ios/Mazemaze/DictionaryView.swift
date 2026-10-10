@@ -71,7 +71,11 @@ struct DictionaryView: View {
     /// The meaning of a word, or what is happening to it (looked up in the background), or the Japanese of an expression.
     @ViewBuilder private func meaningLine(_ e: DictionaryEntry) -> some View {
         if e.kind == .word, e.card == nil, e.meaning == .pending {
-            HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("意味を調べています…").font(.subheadline).foregroundStyle(.secondary) }
+            if model.foundationModelsProblem != nil {
+                Text("Apple Intelligence が使えるようになったら、意味を調べます").font(.subheadline).foregroundStyle(.orange)
+            } else {
+                HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("意味を調べています…").font(.subheadline).foregroundStyle(.secondary) }
+            }
         } else if e.kind == .word, e.card == nil, e.meaning == .failed {
             Text("意味を取得できませんでした（項目を開いてやり直せます）").font(.subheadline).foregroundStyle(.orange)
         } else if !e.japanese.isEmpty {
@@ -122,7 +126,11 @@ private struct DictionaryDetailView: View {
                 if e.kind == .word {
                     Section("意味") {
                         if e.card == nil, e.meaning == .pending {
-                            HStack(spacing: 8) { ProgressView(); Text("調べています（空いたときに、自動で調べます）").foregroundStyle(.secondary) }
+                            if let why = model.foundationModelsProblem {
+                                Label("Apple Intelligence が使えないため、まだ調べられません（\(why)）。使えるようになると、自動で調べます", systemImage: "pause.circle").font(.footnote).foregroundStyle(.orange)
+                            } else {
+                                HStack(spacing: 8) { ProgressView(); Text("調べています（空いたときに、自動で調べます）").foregroundStyle(.secondary) }
+                            }
                         } else if e.card == nil, e.meaning == .failed {
                             Label("意味を取得できませんでした", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                             Button("もう一度、自動で調べる") { model.retryMeaning(entryID: e.id) }.frame(minHeight: 44)
@@ -141,7 +149,7 @@ private struct DictionaryDetailView: View {
                     if let card = e.card { CardContent(card: card) }
                     Button(e.card == nil ? "意味を調べる" : "意味を調べ直す") { lookup = model.lookupSession(for: e) }.frame(minHeight: 44)
                 } header: { Text(e.card == nil ? "詳しい意味" : "詳しい意味（AI が作成）") } footer: {
-                    if e.card == nil { Text("「単語・句の意味」で選んだ方法（Mac のモデルか iPhone の Apple Intelligence）で、単語の意味や句の解説を調べて、この項目に残します。") }
+                    if e.card == nil { Text("iPhone の Apple Intelligence で、単語の意味や句の解説を調べて、この項目に残します。") }
                 }
                 Section("出典") {
                     Text(e.source.isEmpty ? "（不明）" : e.source)

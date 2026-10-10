@@ -78,21 +78,18 @@ enum SelfTest {
 
         func run() async {
             print("SELFTEST START")
+            app.translationEnabled = false                    // read the untouched page first (the fake engine answers instantly)
             await load("/static.html")
             let before = (await inPage("return document.body.innerHTML")) as? String ?? ""
+            app.translationEnabled = true
             let translated = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0")
             let st = await statusJSON()
             report("allowed page is translated by the native bridge", translated, "\(st)")
             report("English spans exist", ((st["english"] as? Int) ?? 0) > 0)
-            report("server was reached (ok count)", tab.okCount > 0, "ok=\(tab.okCount) fail=\(tab.failCount) problem=\(tab.lastProblem ?? "-")")
+            report("the engine was asked (ok count)", tab.okCount > 0, "ok=\(tab.okCount) fail=\(tab.failCount) problem=\(tab.lastProblem ?? "-")")
 
             let leak = await inPage("return [typeof window.__mazemaze, typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.mazemaze)].join(',')") as? String
             report("page world cannot see the script or the native handler", leak == "undefined,undefined", leak ?? "nil")
-            let direct = await inPage("""
-              try { const r = await fetch('\(SelfTest.value("-MazemazeAPI") ?? "http://127.0.0.1:8000")/api/status'); return 'reached:' + r.status; } catch (e) { return 'blocked'; }
-            """) as? String
-            report("page script cannot read the API (CORS/no token; supplementary, the typeof check above is the real isolation proof)", direct == "blocked" || direct == "reached:401" || direct == "reached:403", direct ?? "nil")
-
             let unchanged = await inPage("""
               const ids = ['link','pre','ta','btn','edit','hid','nt','p3'];
               return ids.map(i => { const e = document.getElementById(i); return e ? (e.value !== undefined && e.tagName==='TEXTAREA' ? e.value : e.textContent) : null }).join('|')
@@ -291,7 +288,7 @@ enum SelfTest {
             if let id = app.dictionary.entries.first?.id { app.removeFromDictionary(ids: [id]) }
             report("dictionary: deleting removes it (and from disk)", app.dictionary.entries.count == dictBefore && DictionaryStorage(fileURL: app.dictionaryStorage.fileURL).load().entries.count == dictBefore)
 
-            // ---- meaning cards: "意味を調べる" from the popover goes through the bridge; the card comes from the Mac
+            // ---- meaning cards: "意味を調べる" from the popover goes through the bridge; the card comes from the on-device model
             let lookupReply = await bridge(#"{type:"lookup", kind:"word", term:"have", en:"I have a pen", ja:"ペンを持っています"}"#) as? [String: Any]
             try? await Task.sleep(nanoseconds: 500_000_000)
             report("lookup: the bridge opens the meaning sheet for the word", (lookupReply?["ok"] as? Bool) == true && app.lookupSession?.request.term == "have" && app.lookupSession?.request.kind == .word && app.lookupSession?.request.contextJapanese == "ペンを持っています", "\(lookupReply ?? [:])")
@@ -299,11 +296,11 @@ enum SelfTest {
             report("lookup: a request that is not a single word is refused", badLookup == nil)
             let extraLookup = await bridge(#"{type:"lookup", kind:"word", term:"have", en:"x", ja:"y", url:"https://evil.example/"}"#)
             report("lookup: a request with extra fields is refused", extraLookup == nil)
-            try? await Task.sleep(nanoseconds: 3_000_000_000)           // the sheet asks the Mac (fake model) for the card
+            try? await Task.sleep(nanoseconds: 3_000_000_000)           // the sheet asks the (fake) on-device model for the card
             if let r = app.lookupSession?.request {
                 let outcome = await app.service.define(r)
                 if case .success(.word(let c)) = outcome {
-                    report("lookup: the Mac's card is validated and usable (senses, sense in context)", c.lemma == "have" && c.meanings.count == 3 && c.contextMeaning == "持つ・所有する" && c.matchInSource == "持っています", "\(c.lemma) \(c.meanings.count)")
+                    report("lookup: the model's card is validated and usable (senses, sense in context)", c.lemma == "have" && c.meanings.count == 3 && c.contextMeaning == "持つ・所有する" && c.matchInSource == "持っています", "\(c.lemma) \(c.meanings.count)")
                     if case .more(let more) = await app.service.define(r, more: true, sense: c.contextMeaning), case .success(.word(let merged)) = .success(DefinitionCard.word(c).merging(more)) as DefinitionOutcome {
                         report("lookup: the second step adds an example and expressions", merged.meanings[merged.contextIndex].exampleEn == "I have a pen." && merged.phrases == ["have to", "have been"])
                     } else { report("lookup: the second step adds an example and expressions", false) }
@@ -313,7 +310,7 @@ enum SelfTest {
                     report("lookup: saving a word adds it once, as a word with its senses", s1 == .saved && s2 == .duplicate && app.dictionary.entries.count == before + 1 && app.dictionary.entries.first?.kind == .word && app.dictionary.entries.first?.card != nil)
                     if let id = app.dictionary.entries.first?.id { app.removeFromDictionary(ids: [id]) }
                 } else {
-                    report("lookup: the Mac's card is validated and usable", false, "\(outcome)")
+                    report("lookup: the model's card is validated and usable", false, "\(outcome)")
                 }
                 let phraseReq = LookupRequest.make(kind: .phrase, term: "I have a pen", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています")!
                 let phraseOutcome = await app.service.define(phraseReq)
@@ -332,7 +329,7 @@ enum SelfTest {
                 report("lookup: a word from the iPhone's dictionary is saved with its English phrase and Japanese original, waiting for its meaning, once",
                        w1 == .saved && w2 == .duplicate && app.dictionary.entries.count == before + 1 && e?.kind == .word && e?.english == "have"
                        && e?.contextEnglish == "I have lunch at noon" && e?.contextJapanese == "正午に昼食を食べます" && (e?.meaning == .pending || e?.card != nil), "\(String(describing: e))")
-                // The background worker asks the Mac (the fake model) by itself and fills the meaning in.
+                // The background worker asks the (fake) on-device model by itself and fills the meaning in.
                 for _ in 0..<60 { e = app.dictionary.entries.first { $0.english == "have" && $0.contextJapanese == "正午に昼食を食べます" }; if e?.card != nil { break }; try? await Task.sleep(nanoseconds: 500_000_000) }
                 report("lookup: the meaning of a saved word arrives by itself in the background (the sense in context, no pending left)",
                        e?.card != nil && e?.meaning == MeaningState.none && e?.japanese == "持つ・所有する" && e?.english == "have" && e?.contextEnglish == "I have lunch at noon" && app.dictionary.pendingWords.isEmpty,
@@ -406,98 +403,13 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 800_000_000)
             if let w = first.webView { web = w }
 
-            // ---- The iPhone's own engines (fake, deterministic): translation and meanings without the Mac
-            if SelfTest.value("-MazemazeFakeEngines") == "1" {
-                let goodToken = app.settings.token
-                let goodURL = app.settings.serverURLString
-                try? app.settings.setToken("wrong-token")             // the Mac would refuse: any success below did not come from the Mac
-                app.translationEngine = .appleTranslation
-                await load("/static.html")
-                let beforeDevice = before          // the same page, read before anything was replaced (a fake engine answers instantly)
-                let viaDevice = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 30)
-                let shownDevice = (await inPage("return Array.from(document.querySelectorAll('[data-mz-en]')).map(e => e.textContent).join('|')")) as? String ?? ""
-                report("device engine: the page is translated by the iPhone's engine while the Mac would refuse (wrong token)", viaDevice && shownDevice.contains("Fake English") && (tab.lastProblem ?? "").isEmpty, "shown=\(shownDevice.prefix(80)) problem=\(tab.lastProblem ?? "-")")
-                _ = await inScript("const e = document.querySelector('[data-mz-en]'); e.click(); return 1")
-                let devicePopover = await inScript("const p = document.querySelector('[data-mazemaze-ui]'); return p ? p.textContent : null") as? String
-                report("device engine: tapping English still shows the original Japanese", (devicePopover ?? "").unicodeScalars.contains { $0.value >= 0x3040 }, devicePopover ?? "nil")
-                app.translationEnabled = false
-                let deviceRestored = await waitFor("return window.__mazemaze.status().replaced === 0 && !window.__mazemaze.status().enabled", seconds: 10)
-                let afterDeviceOff = (await inPage("return document.body.innerHTML")) as? String ?? ""
-                report("device engine: toggle OFF restores the original DOM exactly", deviceRestored && afterDeviceOff == beforeDevice)
-                app.translationEnabled = true
-
-                // No Mac configured at all: the iPhone's engine still translates pages (the page script must be told it may)
-                app.settings.serverURLString = ""
-                app.configChanged()
-                await load("/static.html")
-                let noMac = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 30)
-                report("device engine: with no Mac configured at all, pages are still translated", noMac && app.settings.serverConfig() == nil && !app.needsSetup, "needsSetup=\(app.needsSetup) status=\(tab.siteStatus)")
-                app.settings.serverURLString = goodURL
-                app.configChanged()
-
-                // Meanings from the iPhone's engine (validated like the Mac's answer)
-                app.meaningEngine = .foundationModels
-                let wordReq = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have lunch at noon", contextJapanese: "正午に昼食を食べます")!
-                let wordOut = await app.service.define(wordReq)
-                if case .success(.word(let card)) = wordOut { report("device engine: a word card comes from the iPhone's engine", card.lemma == "have" && card.contextMeaning == "食べる", card.contextMeaning) }
-                else { report("device engine: a word card comes from the iPhone's engine", false, "\(wordOut)") }
-
-                // Fallback: Mac first; an unreachable Mac hands over to the iPhone (a wrong token never does)
-                app.translationEngine = .mac
-                app.meaningEngine = .mac
-                app.fallbackToDevice = true
-                app.settings.serverURLString = "http://127.0.0.1:9"      // nothing listens here
-                app.configChanged()
-                await load("/static.html")
-                let viaFallback = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 40)
-                let shownFallback = (await inPage("return Array.from(document.querySelectorAll('[data-mz-en]')).map(e => e.textContent).join('|')")) as? String ?? ""
-                report("fallback: an unreachable Mac hands the page to the iPhone's engine", viaFallback && shownFallback.contains("Fake English"), "shown=\(shownFallback.prefix(60)) problem=\(tab.lastProblem ?? "-")")
-                app.settings.serverURLString = goodURL
-                app.configChanged()
-                await load("/static.html")
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                let wrongTokenStatus = await statusJSON()
-                report("fallback: a wrong token is reported, never hidden behind the iPhone's engine", ((wrongTokenStatus["replaced"] as? Int) ?? 0) == 0 && (tab.lastProblem ?? "").contains("トークン"), "problem=\(tab.lastProblem ?? "-") status=\(wrongTokenStatus)")
-                app.fallbackToDevice = false
-                try? app.settings.setToken(goodToken)
-                app.configChanged()
-            }
-
-            // Wrong token: the page keeps its original text and the user sees a clear message.
-            let goodToken = app.settings.token
-            try? app.settings.setToken("wrong-token")
-            app.configChanged()
+            // ---- Switching the engine in the settings translates the page again with the other engine
+            app.translationEngine = .foundationModels
             await load("/static.html")
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            let wrong = await statusJSON()
-            report("wrong token: no replacement, clear message, translation stops", ((wrong["replaced"] as? Int) ?? 0) == 0 && (tab.lastProblem ?? "").contains("トークン") && (wrong["stopped"] as? String) == "unauthorized", "problem=\(tab.lastProblem ?? "-") status=\(wrong)")
-            try? app.settings.setToken(goodToken)
-            app.configChanged()
-
-            // ---- Pairing over https with a pinned self-signed certificate
-            if let good = SelfTest.value("-MazemazePairGood"), let wrong = SelfTest.value("-MazemazePairWrongPin") {
-                let before = app.settings.serverURLString
-                app.receivePairing(good)
-                report("a pairing text is parsed but not applied until the person confirms", app.pendingPairing != nil && app.settings.serverURLString == before && app.settings.pinnedFingerprint == nil)
-                app.confirmPairing()
-                var state: ConnectionReport.State?
-                for _ in 0..<100 { if let c = app.connection { state = c.state; break }; try? await Task.sleep(nanoseconds: 300_000_000) }
-                report("paired: https with the pinned certificate works, and the unreachable .local name fell back to the IP address",
-                       state == .ok && app.settings.pinnedFingerprint != nil && app.settings.serverConfig()?.baseURL.scheme == "https" && app.settings.serverConfig()?.fallbackURL != nil,
-                       "state=\(String(describing: state)) \(app.connection?.message ?? "-")")
-                await load("/static.html")
-                let viaTLS = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 40)
-                report("translation works through the pinned TLS connection", viaTLS, "\(await statusJSON())")
-                app.connection = nil
-                app.receivePairing(wrong)
-                app.confirmPairing()
-                var wrongState: ConnectionReport?
-                for _ in 0..<100 { if let c = app.connection { wrongState = c; break }; try? await Task.sleep(nanoseconds: 300_000_000) }
-                report("a server with a different certificate is refused with a clear message", wrongState?.state == .failed && (wrongState?.message ?? "").contains("証明書"), wrongState?.message ?? "nil")
-                _ = await app.service.translate(scope: tab.id, gen: await app.service.generation(of: tab.id), text: "証明書が違うサーバーへ送ろうとするテキスト")
-                let again = await app.checkConnection()
-                report("it keeps refusing (no silent downgrade to http)", again.state == .failed && app.settings.serverConfig()?.baseURL.scheme == "https", again.message)
-            }
+            let viaOther = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 30)
+            let shownOther = (await inPage("return Array.from(document.querySelectorAll('[data-mz-en]')).map(e => e.textContent).join('|')")) as? String ?? ""
+            report("engine switch: the page is translated by the other engine", viaOther && shownOther.contains("Fake Model") && !shownOther.contains("Fake English") && (tab.lastProblem ?? "").isEmpty, "shown=\(shownOther.prefix(80)) problem=\(tab.lastProblem ?? "-")")
+            app.translationEngine = .appleTranslation
 
             print("SELFTEST DONE passed=\(passed) failed=\(failed)")
             fflush(stdout)
@@ -508,14 +420,16 @@ enum SelfTest {
 
 /// Deterministic stand-ins for the iPhone's engines (launch argument -MazemazeFakeEngines 1; tests only).
 final class FakeDeviceEngines: DeviceEngineProvider, @unchecked Sendable {
-    func translationEngine(_ kind: TranslationEngineKind) -> SpanTranslationEngine? { kind == .mac ? nil : FakeTranslationEngine() }
+    func translationEngine(_ kind: TranslationEngineKind) -> SpanTranslationEngine? { FakeTranslationEngine(kind) }
     func definitionEngine() -> DefinitionEngine? { FakeMeaningEngine() }
 }
 
 final class FakeTranslationEngine: SpanTranslationEngine, @unchecked Sendable {
-    let identifier = "fake"
+    let identifier: String
+    private let label: String
+    init(_ kind: TranslationEngineKind) { identifier = "fake-\(kind.rawValue)"; label = kind == .appleTranslation ? "Fake English" : "Fake Model" }
     func translate(text: String, spans: [SelectedSpan]) async throws -> [String: String] {
-        Dictionary(uniqueKeysWithValues: spans.map { ($0.id, "Fake English \($0.id.dropFirst())") })
+        Dictionary(uniqueKeysWithValues: spans.map { ($0.id, "\(label) \($0.id.dropFirst())") })
     }
 }
 
@@ -523,10 +437,10 @@ final class FakeMeaningEngine: DefinitionEngine, @unchecked Sendable {
     let identifier = "fake-meaning"
     func answer(kind: LookupKind, detail: DefinitionDetail, term: String, contextEnglish: String, contextJapanese: String, sense: String) async throws -> String {
         switch (kind, detail) {
-        case (.word, .basic): return #"{"matchInSource":"食べ","senses":[{"gloss":"持つ"},{"gloss":"食べる"}],"contextIndex":1,"lemma":"have","pos":"動詞"}"#
-        case (.word, .more): return #"{"example":{"en":"I have a pen.","ja":"ペンを持っている。"},"phrases":["have to"],"note":""}"#
-        case (.phrase, .basic): return #"{"meaning":"昼食をとる","nuance":""}"#
-        case (.phrase, .more): return #"{"points":[{"expr":"have lunch","note":"食事をとる"}],"synonyms":["eat lunch"]}"#
+        case (.word, .basic): return #"{"matchInSource":"持っています","senses":[{"gloss":"持つ・所有する"},{"gloss":"食べる・飲む"},{"gloss":"経験する"}],"contextIndex":0}"#
+        case (.word, .more): return #"{"example":{"en":"I have a pen.","ja":"私はペンを持っています。"},"phrases":["have to","have been"],"note":"have to は「〜しなければならない」"}"#
+        case (.phrase, .basic): return #"{"meaning":"私はペンを持っています","nuance":"くだけた言い方"}"#
+        case (.phrase, .more): return #"{"points":[{"expr":"have","note":"所有"}],"synonyms":["I've got a pen"],"example":{"en":"I have a red pen.","ja":"赤いペンを持っています。"}}"#
         }
     }
 }

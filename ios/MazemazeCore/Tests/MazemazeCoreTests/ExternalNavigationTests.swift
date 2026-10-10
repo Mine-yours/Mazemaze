@@ -35,31 +35,3 @@ final class ExternalNavigationTests: XCTestCase {
         }
     }
 }
-
-final class ConnectionDescriptionTests: XCTestCase {
-    func testMessagesGuideTheUser() {
-        XCTAssertTrue(ConnectionChecker.describe(URLError(.notConnectedToInternet)).contains("ローカルネットワーク"))
-        XCTAssertTrue(ConnectionChecker.describe(URLError(.timedOut)).contains("スリープ"))
-        XCTAssertTrue(ConnectionChecker.describe(URLError(.cannotConnectToHost)).contains("run_lan.sh"))
-        XCTAssertTrue(ConnectionChecker.describe(URLError(.cannotFindHost)).contains("IP アドレス"))
-        XCTAssertTrue(ConnectionChecker.describe(NSError(domain: "x", code: 1)).contains("run_lan.sh"))
-    }
-    func testCertificateProblemsPointToPairing() {
-        for code: URLError.Code in [.serverCertificateUntrusted, .secureConnectionFailed, .serverCertificateHasUnknownRoot, .serverCertificateHasBadDate] {
-            let msg = ConnectionChecker.describe(URLError(code))
-            XCTAssertTrue(msg.contains("QR") && msg.contains("証明書"), "\(code)")
-        }
-        XCTAssertEqual(TranslationFailure.certificateUntrusted.code, "certificate_untrusted")
-    }
-
-    func testFingerprintIsShownTheWayTheMacPrintsIt() {
-        let fp = "7734d699d930869ba850de701b4300834dc3f35f2a1c544fd2b66719b43fa4cd"
-        guard case .success(let p) = PairingPayload.parse("mazemaze://pair?v=1&h=a.local&p=8000&t=0123456789abcdef&s=https&f=\(fp)") else { return XCTFail() }
-        XCTAssertEqual(p.shortFingerprint, "7734d699d930869b…")      // run_lan.sh prints ${FP:0:16}…
-    }
-
-    func testNoSecretsInMessages() {
-        let msg = ConnectionChecker.describe(URLError(.timedOut, userInfo: [NSURLErrorFailingURLStringErrorKey: "http://192.168.1.5/?token=abc"]))
-        XCTAssertFalse(msg.contains("token")); XCTAssertFalse(msg.contains("192.168"))
-    }
-}

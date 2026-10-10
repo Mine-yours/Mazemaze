@@ -1,10 +1,6 @@
 import XCTest
 @testable import MazemazeCore
 
-private func cardResponse(_ card: [String: Any]) -> HTTPResponse {
-    HTTPResponse(status: 200, body: try! JSONSerialization.data(withJSONObject: ["card": card, "model": "qwen3.5:9b"]))
-}
-
 private let wordCardJSON: [String: Any] = [
     "kind": "word", "lemma": "have", "pos": "動詞", "contextMeaning": "持つ・所有する", "contextIndex": 0, "matchInSource": "持っています",
     "meanings": [["meaning": "持つ・所有する"], ["meaning": "食べる・飲む"], ["meaning": "経験する"]],
@@ -118,144 +114,56 @@ final class DefinitionModelTests: XCTestCase {
     }
 }
 
-final class DefineServiceTests: XCTestCase {
-    private let request = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています")!
-
-    func testRequestShapeCardAndCache() async throws {
-        let t = MockTransport { _, _ in cardResponse(wordCardJSON) }
-        let s = makeService(t)
-        guard case .success(.word(let c)) = await s.define(request) else { return XCTFail() }
-        XCTAssertEqual(c.lemma, "have")
-        let sent = t.requests[0]
-        XCTAssertEqual(sent.url.path, "/api/define"); XCTAssertEqual(sent.method, "POST")
-        XCTAssertEqual(sent.headers["X-Mazemaze-Token"], "secret-token")
-        let body = try JSONSerialization.jsonObject(with: sent.body!) as! [String: String]
-        XCTAssertEqual(body, ["kind": "word", "term": "have", "context_en": "I have a pen", "context_ja": "ペンを持っています", "detail": "basic", "sense": ""])
-        _ = await s.define(request)
-        XCTAssertEqual(t.count, 1, "the same lookup is answered from memory")
-    }
-
-    func testTheSecondStepAsksForMoreWithTheSense() async throws {
-        let t = MockTransport { r, _ in
-            let body = try! JSONSerialization.jsonObject(with: r.body!) as! [String: String]
-            return cardResponse(body["detail"] == "more" ? wordMoreJSON : wordCardJSON)
-        }
-        let s = makeService(t)
-        _ = await s.define(request)
-        guard case .more(.word(let ex, let phrases, _)) = await s.define(request, more: true, sense: "持つ・所有する") else { return XCTFail() }
-        XCTAssertEqual(ex?.en, "I have a pen."); XCTAssertEqual(phrases, ["have to", "have been"])
-        let sent = try JSONSerialization.jsonObject(with: t.requests[1].body!) as! [String: String]
-        XCTAssertEqual(sent["detail"], "more"); XCTAssertEqual(sent["sense"], "持つ・所有する")
-        _ = await s.define(request, more: true, sense: "持つ・所有する")
-        XCTAssertEqual(t.count, 2, "each step is cached on its own")
-    }
-
-    func testBusyServerIsRetriedAndErrorsMap() async {
-        var n = 0
-        let t = MockTransport { _, _ in n += 1; return n < 3 ? jsonResponse(429, headers: ["retry-after": "2"]) : cardResponse(wordCardJSON) }
-        let clock = ManualClock()
-        let s = makeService(t, clock: clock)
-        guard case .success = await s.define(request) else { return XCTFail() }
-        XCTAssertEqual(t.count, 3); XCTAssertEqual(clock.sleeps.reduce(0, +), 4, accuracy: 0.01)
-
-        let unauth = makeService(MockTransport { _, _ in serverUnauthorized() })
-        let r_unauth = await unauth.define(request)
-        XCTAssertEqual(r_unauth, .failure(.unauthorized))
-        let unsupported = makeService(MockTransport { _, _ in jsonResponse(501, message: "このモデルでは調べられません") })
-        let r_unsupported = await unsupported.define(request)
-        XCTAssertEqual(r_unsupported, .failure(.server("このモデルでは調べられません")))
-        let bad = makeService(MockTransport { _, _ in jsonResponse(422, message: "調べる語句が正しくありません") })
-        let r_bad = await bad.define(request)
-        XCTAssertEqual(r_bad, .failure(.rejected("調べる語句が正しくありません")))
-        let garbage = makeService(MockTransport { _, _ in HTTPResponse(status: 200, body: Data("{}".utf8)) })
-        let r_garbage = await garbage.define(request)
-        XCTAssertEqual(r_garbage, .failure(.invalidResponse))
-        let down = makeService(MockTransport { _, _ in throw URLError(.cannotConnectToHost) })
-        let r_down = await down.define(request)
-        XCTAssertEqual(r_down, .failure(.unreachable))
-    }
+final class LookupPriorityTests: XCTestCase {
+    let request = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have a pen", contextJapanese: "ペンを持っています")!
+    let answer = #"{"matchInSource":"持って","senses":[{"gloss":"持つ"},{"gloss":"食べる"}],"contextIndex":0}"#
 
     func testABackgroundLookupWaitsForAQuietMomentAndLetsTranslationGoFirst() async {
-        let clock = ManualClock()
-        let t = MockTransport { r, _ in r.url.path.hasSuffix("define") ? cardResponse(wordCardJSON) : okResponse(for: r) }
+        let clock = ManualClock(); let order = OrderBox()
+        let engine = FakeSpanEngine { t, spans in order.add(t); return try await numberedEnglish(t, spans) }
+        let def = FakeDefinitionEngine { _, _, _ in order.add("define"); return self.answer }
         var options = TranslationService.Options(); options.backgroundIdle = 10
-        let s = makeService(t, clock: clock, options: options)
+        let s = makeService(engine, clock: clock, definer: def, options: options)
         _ = await s.translate(gen: 0, text: "読んでいる最中の文章です")          // reading just happened
         let started = clock.now()
         guard case .success = await s.define(request, background: true) else { return XCTFail() }
-        XCTAssertGreaterThanOrEqual(clock.now() - started, 10 - 2, "it waited for the idle time (in steps of 2 s) before asking the Mac")
-        XCTAssertEqual(t.requests.map { $0.url.path.split(separator: "/").last.map(String.init) ?? "" }, ["translate", "define"])
+        XCTAssertGreaterThanOrEqual(clock.now() - started, 10 - 2, "it waited for the idle time (in steps of 2 s) before making the card")
+        XCTAssertEqual(order.all, ["読んでいる最中の文章です", "define"])
     }
 
-    func testBackgroundLookupsAreServedAfterEveryTranslationWaiting() async {
-        let gate = AsyncGate()
-        let lock = NSLock(); var order: [String] = []
-        let t = MockTransport { r, _ in
-            lock.lock(); order.append(r.url.path.hasSuffix("define") ? "define" : (MockTransport.text(of: r) ?? "?")); lock.unlock()
-            return r.url.path.hasSuffix("define") ? cardResponse(wordCardJSON) : okResponse(for: r)
-        }
-        t.gates["first"] = gate
+    func testABackgroundLookupStartedFirstStillWaitsForEveryTranslation() async {
+        let gate = AsyncGate(); let order = OrderBox()
+        let engine = FakeSpanEngine { t, spans in order.add(t); return try await numberedEnglish(t, spans) }
+        engine.gates["最初のテキストです"] = gate
+        let def = FakeDefinitionEngine { _, _, _ in order.add("define"); return self.answer }
         var options = TranslationService.Options(); options.backgroundIdle = 0
-        let s = makeService(t, options: options)
-        let first = Task { await s.translate(gen: 0, text: "first") }
-        while t.count < 1 { try? await Task.sleep(nanoseconds: 5_000_000) }
+        let s = makeService(engine, definer: def, options: options)
+        let first = Task { await s.translate(gen: 0, text: "最初のテキストです") }
+        while engine.count < 1 { try? await Task.sleep(nanoseconds: 5_000_000) }
         let background = Task { await s.define(request, background: true) }
         try? await Task.sleep(nanoseconds: 60_000_000)
-        let second = Task { await s.translate(gen: 0, text: "second") }
+        let second = Task { await s.translate(gen: 0, text: "二番目のテキストです") }
         try? await Task.sleep(nanoseconds: 60_000_000)
         await gate.release()
         _ = await first.value; _ = await second.value; _ = await background.value
-        lock.lock(); defer { lock.unlock() }
-        XCTAssertEqual(order, ["first", "second", "define"], "the background lookup queued first but goes last")
-    }
-
-    func testABusyMacMakesTheBackgroundGiveUpSoonerThanAPerson() async {
-        var n = 0
-        let t = MockTransport { _, _ in n += 1; return jsonResponse(429, headers: ["retry-after": "1"]) }
-        var options = TranslationService.Options(); options.backgroundIdle = 0
-        let s = makeService(t, options: options)
-        let bg = await s.define(request, background: true)
-        XCTAssertEqual(bg, .failure(.busy)); XCTAssertEqual(t.count, 4, "1 try + 3 retries")
-        let person = makeService(MockTransport { _, _ in jsonResponse(429, headers: ["retry-after": "1"]) }, options: options)
-        let p = await person.define(request)
-        XCTAssertEqual(p, .failure(.busy))
-    }
-
-    func testAnOldServerGetsAClearMessage() async {
-        let old = makeService(MockTransport { _, _ in jsonResponse(404) })
-        let r = await old.define(request)
-        guard case .failure(.server(let m)) = r else { return XCTFail() }
-        XCTAssertTrue(m.contains("古い") && m.contains("run_lan.sh"), m)
-    }
-
-    func testNotConfigured() async {
-        let t = MockTransport { _, _ in cardResponse(wordCardJSON) }
-        let s = TranslationService(transport: t, config: { nil }, prefs: { (0.3, .phrase) })
-        let r_s = await s.define(request)
-        XCTAssertEqual(r_s, .failure(.notConfigured))
-        XCTAssertEqual(t.count, 0)
+        XCTAssertEqual(order.all, ["最初のテキストです", "二番目のテキストです", "define"], "the background lookup was asked first, but waits until no translation is running or waiting")
     }
 
     func testALookupGoesBeforeWaitingTranslations() async {
-        let gate = AsyncGate()
-        var order: [String] = []
-        let lock = NSLock()
-        let t = MockTransport { r, _ in
-            lock.lock(); order.append(r.url.path); lock.unlock()
-            return r.url.path.hasSuffix("define") ? cardResponse(wordCardJSON) : okResponse(for: r)
-        }
-        t.gates["first"] = gate
-        let s = makeService(t)
-        let first = Task { await s.translate(gen: 0, text: "first") }
-        while t.count < 1 { try? await Task.sleep(nanoseconds: 5_000_000) }
-        let second = Task { await s.translate(gen: 0, text: "second") }
+        let gate = AsyncGate(); let order = OrderBox()
+        let engine = FakeSpanEngine { t, spans in order.add(t); return try await numberedEnglish(t, spans) }
+        engine.gates["最初のテキストです"] = gate
+        let def = FakeDefinitionEngine { _, _, _ in order.add("define"); return self.answer }
+        let s = makeService(engine, definer: def)
+        let first = Task { await s.translate(gen: 0, text: "最初のテキストです") }
+        while engine.count < 1 { try? await Task.sleep(nanoseconds: 5_000_000) }
+        let second = Task { await s.translate(gen: 0, text: "二番目のテキストです") }
         try? await Task.sleep(nanoseconds: 60_000_000)
         let lookup = Task { await s.define(request) }
         try? await Task.sleep(nanoseconds: 60_000_000)
         await gate.release()
         _ = await first.value; _ = await second.value; _ = await lookup.value
-        lock.lock(); defer { lock.unlock() }
-        XCTAssertEqual(order.map { $0.split(separator: "/").last.map(String.init) ?? "" }, ["translate", "define", "translate"], "the lookup jumps the queue; one request at a time")
-        XCTAssertEqual(t.maxActive, 1)
+        XCTAssertEqual(order.all, ["最初のテキストです", "define", "二番目のテキストです"], "the lookup jumps the queue; one request at a time")
+        XCTAssertEqual(engine.maxActive, 1)
     }
 }

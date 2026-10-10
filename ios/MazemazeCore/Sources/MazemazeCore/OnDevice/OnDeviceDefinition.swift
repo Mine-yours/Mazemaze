@@ -2,8 +2,8 @@ import Foundation
 
 /// Validation of a word / phrase card made by an on-device model (port of `parse_card` in backend/define.py).
 /// The model's output is never trusted: every field is checked for type and length, control characters are
-/// refused, and anything unusable is dropped. The result has the shape of the Mac server's answer, so the app
-/// decodes it with `DefinitionCard.decode` — the same second check the Mac path goes through.
+/// refused, and anything unusable is dropped. The result has the shape of the answer the Mac version's server gave (branch mac-local-model), so the app
+/// decodes it with `DefinitionCard.decode` — the same second check the original path had.
 public enum OnDeviceDefinition {
     static let lemmaPattern = try! NSRegularExpression(pattern: "^[A-Za-z][A-Za-z'’-]{0,39}$")
 
@@ -104,7 +104,7 @@ public enum OnDeviceDefinition {
         }
     }
 
-    /// `{"card": ...}`: the Mac server's answer, ready for `DefinitionCard.decode` / `DefinitionMore.decode`.
+    /// `{"card": ...}`: the original server answer's shape, ready for `DefinitionCard.decode` / `DefinitionMore.decode`.
     public static func serverResponse(kind: LookupKind, detail: DefinitionDetail, content: String, contextJapanese: String) -> Data? {
         guard let c = card(kind: kind, detail: detail, content: content, contextJapanese: contextJapanese) else { return nil }
         return try? JSONSerialization.data(withJSONObject: ["card": c, "model": "on-device"])

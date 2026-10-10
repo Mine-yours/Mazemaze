@@ -7,6 +7,6 @@ let package = Package(
     products: [.library(name: "MazemazeCore", targets: ["MazemazeCore"])],
     targets: [
         .target(name: "MazemazeCore"),
-        .testTarget(name: "MazemazeCoreTests", dependencies: ["MazemazeCore"], resources: [.copy("Resources/ondevice_golden.json")]),
+        .testTarget(name: "MazemazeCoreTests", dependencies: ["MazemazeCore"], exclude: ["Resources/README.md"], resources: [.copy("Resources/ondevice_golden.json")]),
     ]
 )

@@ -1,5 +1,15 @@
 # Handoff state
 
+## 現在の状態（2026-10-10・最新）: 完全ローカル版（`main`）
+所有者の決定で、`main` を **iPhone 単体版**にした。翻訳（Apple 翻訳 / Apple Intelligence）と単語・句の意味（Apple Intelligence）は、すべて iPhone の中のエンジンで動く。**Mac のローカルモデル版（FastAPI サーバー、Web UI、QR ペアリング、Tailscale、評価環境）は、ブランチ `mac-local-model`（`cef50de` の時点）に残してある**（リモートにもある）。`main` からは、サーバー・通信・ペアリング・ピン留め・Tailscale・Keychain のトークン・Ollama の評価環境・Python のテストを削除した。
+
+- ページの翻訳の既定は Apple 翻訳。設定で Apple Intelligence も選べる。単語・句の意味は Apple Intelligence。標準辞書は別で常に使える。
+- 置き換える場所の選択・検証・表示整形・意味カードの検証は、Python から Swift に移したもの（`ios/MazemazeCore/.../OnDevice/`）。基準との一致は、約 1.4 万件の正解データで `OnDeviceGoldenTests` が確認する。
+- テスト（削除後）: `swift test` 131 件、DOM テスト 108 件、シミュレータ自己テスト 60 項目（偽エンジン）、Release ビルド OK。pytest は無くなった。
+- **実機は未確認**（`docs/ai/IPHONE_DEVICE_CHECKLIST.md`）。特に Apple 翻訳（見えない部品が設定・貼り付け画面の裏でも動くか、ダウンロードの確認画面が出るか）、Apple Intelligence の速さ・発熱・質。
+- 質の測定（Apple Intelligence、この Mac）と決定の理由・限界は `docs/ai/DECISIONS.md`。Apple 翻訳は未測定。
+- 以降の節は、Mac 版の時代の記録（サーバー・Web UI・評価・外出先など）。`main` には、その実装は無い。
+
 ## iPhone アプリ v2（2026-10-09 更新・最新）
 実機で動作確認できた初版（`456e845` 以降の未コミットの変更を含む）に対し、①翻訳待ち時間 ②独自ホーム ③タブ ④サーバー接続（QR ペアリング・暗号化）を実装した。**すべて未コミット**（承認待ち）。**v2 の実機確認はこれから**（`docs/ai/IPHONE_DEVICE_CHECKLIST.md`）。（当時は X・Safari 拡張・UA 変更は対象外としていたが、その後の第2段階で X に限り UA 変更を行った。末尾の「第2段階」節と `DECISIONS.md` を参照）。
 

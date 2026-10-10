@@ -14,7 +14,7 @@ IOS = Path(__file__).resolve().parent.parent
 APP_DIR = IOS / "Mazemaze"
 PROJ = IOS / "Mazemaze.xcodeproj"
 BUNDLE_ID = os.environ.get("MAZEMAZE_BUNDLE_ID", "jp.mineno.mazemaze")
-DEPLOYMENT = "17.0"
+DEPLOYMENT = "18.0"
 
 
 def oid(name: str) -> str:

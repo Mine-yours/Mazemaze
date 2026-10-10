@@ -9,7 +9,7 @@ public enum SiteDecision: Equatable {
 /// Which DOM strategy translator.js uses. Chosen by Swift from the verified URL, never by the page.
 public enum SiteProfile: String, Equatable { case x, generic }
 
-/// Decides on which pages text may be translated (and therefore sent to the Mac). Everything not
+/// Decides on which pages text may be translated (and therefore handed to the translation engine). Everything not
 /// explicitly allowed is refused.
 public struct SitePolicy: Equatable {
     public static let defaultAllowedHosts = ["x.com", "twitter.com", "news.yahoo.co.jp"]

@@ -3,16 +3,13 @@ import WebKit
 import MazemazeCore
 
 /// Owns the settings, the shared translation service and the list of tabs. Page text only ever flows
-/// WebView -> (validated) -> TranslationService -> the Mac server on the local network.
+/// WebView -> (validated) -> TranslationService -> an engine inside this iPhone (Apple Translation / Apple Intelligence). Nothing is sent anywhere.
 @MainActor
 final class AppModel: ObservableObject {
     static let maxTabs = TabsSnapshot.maxTabs
     static let maxLiveTabs = 4              // more tabs than this sleep (their web views are released)
 
     let settings: SettingsStore
-    let urlTransport: URLSessionTransport
-    var transport: HTTPTransport { urlTransport }
-    let resolver: EndpointResolver
     let service: TranslationService
     var sitePolicy: SitePolicy
     private let usesDebugArgs: Bool
@@ -38,12 +35,9 @@ final class AppModel: ObservableObject {
     @Published var unit: TranslationUnit { didSet { if oldValue != unit { settings.unit = unit; configChanged() } } }
     @Published var allowedHosts: [String]
 
-    // Where translations and word meanings are made: the Mac, or this iPhone (Apple Translation / Apple Intelligence).
+    // Where translations and word meanings are made: inside this iPhone (Apple Translation / Apple Intelligence).
     let deviceEngines: DeviceEngines
     @Published var translationEngine: TranslationEngineKind { didSet { if oldValue != translationEngine { settings.translationEngine = translationEngine; engineChanged() } } }
-    @Published var meaningEngine: MeaningEngineKind { didSet { if oldValue != meaningEngine { settings.meaningEngine = meaningEngine; engineChanged() } } }
-    @Published var fallbackToDevice: Bool { didSet { if oldValue != fallbackToDevice { settings.fallbackToDevice = fallbackToDevice; engineChanged() } } }
-    @Published var deviceTranslation: TranslationEngineKind { didSet { if oldValue != deviceTranslation { settings.deviceTranslation = deviceTranslation; engineChanged() } } }
     @Published private(set) var appleTranslationStatus = "確認していません"
     @Published private(set) var appleTranslationInstalled = false
     @Published private(set) var appleTranslationCanDownload = false
@@ -59,13 +53,6 @@ final class AppModel: ObservableObject {
     // Home screen
     @Published private(set) var bookmarks: BookmarkData
     private let bookmarkStorage: BookmarkStorage
-    @Published var connection: ConnectionReport?
-    @Published var checkingConnection = false
-    @Published var pendingPairing: PairingPayload?       // waiting for the person's confirmation
-    @Published var pairingError: String?
-    @Published var pairingResult: String?
-    @Published var pairingNonce = 0                      // bumps on every incoming pairing (even if the state looks the same)
-    @Published var pairingPromptVisible = false          // the alert may appear only after open sheets have been closed
     private var suppressPersistUntilChange = false
     private var meaningWorker: Task<Void, Never>?
     private var meaningRetryAt: [UUID: Date] = [:]
@@ -81,15 +68,12 @@ final class AppModel: ObservableObject {
         func arg(_ name: String) -> String? { args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
         let debugAllowLocalhost = arg("-MazemazeAllowLocalhost") == "1"
         // Launch arguments are for tests only. They must never overwrite the settings of a real
-        // installation (a leftover test server URL looks exactly like "the server is down"), so a
-        // run that uses them gets throw-away defaults and an in-memory token.
+        // installation, so a run that uses them gets throw-away defaults.
         let persistProbe = arg("-MazemazePersistTest")          // write/read the REAL stores across launches (test device only)
-        let usesDebugArgs = persistProbe == nil && (arg("-MazemazeSelfTest") == "1" || arg("-MazemazeAPI") != nil || arg("-MazemazeToken") != nil)
+        let usesDebugArgs = persistProbe == nil && (arg("-MazemazeSelfTest") == "1" || arg("-MazemazeFakeEngines") == "1")
         let defaults: UserDefaults = usesDebugArgs ? UserDefaults(suiteName: "mazemaze.debugargs")! : .standard
         if usesDebugArgs { defaults.removePersistentDomain(forName: "mazemaze.debugargs") }
-        let secrets: SecretStore = usesDebugArgs ? InMemorySecretStore(token: arg("-MazemazeToken")) : KeychainSecretStore()
-        let store = SettingsStore(defaults: defaults, secrets: secrets)
-        if let api = arg("-MazemazeAPI") { store.serverURLString = api }
+        let store = SettingsStore(defaults: defaults)
         if arg("-MazemazeNoAutoHide") == "1" { store.autoHideBars = false }
         let initialURL = arg("-MazemazeInitialURL").flatMap(URL.init(string:))
         self.demoTabs = Int(arg("-MazemazeDemoTabs") ?? "") ?? 0
@@ -97,22 +81,21 @@ final class AppModel: ObservableObject {
         #else
         let usesDebugArgs = false
         let debugAllowLocalhost = false
-        let store = SettingsStore(secrets: KeychainSecretStore())
+        let store = SettingsStore()
         let initialURL: URL? = nil
         #endif
         self.usesDebugArgs = usesDebugArgs
         settings = store
-        let urlTransport = URLSessionTransport()
-        self.urlTransport = urlTransport
-        resolver = EndpointResolver(transport: urlTransport)
+        #if DEBUG
+        if !usesDebugArgs { LegacyCleanup.run(defaults: store.userDefaults) }
+        #else
+        LegacyCleanup.run(defaults: store.userDefaults)
+        #endif
         translationEnabled = store.translationEnabled
         ratio = store.ratio
         unit = store.unit
         allowedHosts = store.allowedHosts
         translationEngine = store.translationEngine
-        meaningEngine = store.meaningEngine
-        fallbackToDevice = store.fallbackToDevice
-        deviceTranslation = store.deviceTranslation
         deviceEngines = DeviceEngines()
         restoreTabsEnabled = store.restoreTabs
         recentsEnabled = store.recentsEnabled
@@ -143,17 +126,11 @@ final class AppModel: ObservableObject {
         #if DEBUG
         if arg("-MazemazeFakeEngines") == "1" { engineProvider = FakeDeviceEngines() }          // tests: deterministic engines, no system model
         if let mode = arg("-MazemazeEngine").flatMap(TranslationEngineKind.init(rawValue:)) { store.translationEngine = mode; translationEngine = mode }
-        if let mode = arg("-MazemazeMeaningEngine").flatMap(MeaningEngineKind.init(rawValue:)) { store.meaningEngine = mode; meaningEngine = mode }
-        if arg("-MazemazeFallbackToDevice") == "1" { store.fallbackToDevice = true; fallbackToDevice = true }
         #endif
-        service = TranslationService(transport: urlTransport,
-                                     config: { s.serverConfig() },
+        service = TranslationService(engines: engineProvider,
+                                     engine: { s.translationEngine },
                                      prefs: { (s.ratio, s.unit) },
-                                     options: serviceOptions,
-                                     resolver: resolver,
-                                     engines: engineProvider,
-                                     enginePrefs: { s.enginePrefs })
-        syncPins()
+                                     options: serviceOptions)
         startTabs(initialURL: initialURL)
         Task { [service, id = activeID] in await service.setActiveScope(id) }
         #if DEBUG
@@ -168,11 +145,8 @@ final class AppModel: ObservableObject {
     #if DEBUG
     /// Used by ios/scripts/persistence_test.sh: proves what survives an app restart / update / reinstall.
     private func runPersistProbe(_ mode: String) {
-        let fp = String(repeating: "ab", count: 32)
         if mode == "write" {
-            settings.serverURLString = "https://persist-test.local:8000"
-            try? settings.setToken("persist-token-abcdef123456")
-            settings.pinnedFingerprint = fp
+            settings.translationEngine = .foundationModels
             addFavorite(url: URL(string: "https://example.com/fav"), title: "Fav")
             tabs = [makeTab(url: URL(string: "https://news.yahoo.co.jp/articles/a?token=1"), title: "記事"),
                     makeTab(url: URL(string: "https://mail.example.com/inbox"), title: "受信箱")]
@@ -182,8 +156,7 @@ final class AppModel: ObservableObject {
             print("PERSIST WROTE")
         } else {
             let tabsRestored = TabsSnapshot.restore(from: settings.savedTabsData, allowedHosts: SessionPrivacy.titleHosts)?.tabs.map { $0.url ?? "home" } ?? []
-            print("PERSIST READ url=\(settings.serverURLString == "https://persist-test.local:8000" ? "OK" : "MISSING(\(settings.serverURLString))") "
-                  + "token=\(settings.token == "persist-token-abcdef123456" ? "OK" : "MISSING") pin=\(settings.pinnedFingerprint == fp ? "OK" : "MISSING") "
+            print("PERSIST READ engine=\(settings.translationEngine == .foundationModels ? "OK" : "MISSING(\(settings.translationEngine.rawValue))") "
                   + "favorites=\(bookmarks.favorites.count) tabs=\(tabsRestored)")
         }
         fflush(stdout)
@@ -199,7 +172,6 @@ final class AppModel: ObservableObject {
         guard !showPaste else { return }
         active.pauseInPage?()          // only once the screen is really shown
         showPaste = true
-        warmupIfNeeded()
     }
 
     /// Show the translated page for these lines (a new page, a new generation, every time).
@@ -329,7 +301,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// An engine setting changed: pages translate again with the new engine, pending meanings use the new one.
+    /// The engine changed: pages translate again with the new one.
     func engineChanged() {
         configChanged()
         startMeaningWorker()
@@ -338,10 +310,20 @@ final class AppModel: ObservableObject {
 
     /// What the iPhone's engines can do right now (shown in the settings and on the home screen).
     func refreshEngineStatus() {
+        let hadProblem = foundationModelsProblem != nil
         foundationModelsProblem = DeviceEngines.foundationModelsProblem()
+        if hadProblem && foundationModelsProblem == nil { startMeaningWorker() }               // Apple Intelligence was switched on: saved words get their meanings
         if #available(iOS 18.0, *), let host = deviceEngines.appleHost {
-            Task { await host.refreshAvailability(); appleTranslationStatus = host.status; appleTranslationInstalled = host.isInstalled; appleTranslationCanDownload = host.canDownload }
+            Task { await host.refreshAvailability(); applyAppleStatus(host) }
         } else { appleTranslationStatus = "iOS 18 以降が必要です"; appleTranslationInstalled = false; appleTranslationCanDownload = false }
+    }
+
+    @available(iOS 18.0, *)
+    private func applyAppleStatus(_ host: AppleTranslationHost) {
+        let was = appleTranslationInstalled
+        appleTranslationStatus = host.status; appleTranslationInstalled = host.isInstalled; appleTranslationCanDownload = host.canDownload
+        // The data arrived: a page that stopped because it was missing starts again (without a reload).
+        if !was && host.isInstalled && translationEngine == .appleTranslation { configChanged() }
     }
 
     func requestAppleTranslationDownload() {
@@ -349,67 +331,13 @@ final class AppModel: ObservableObject {
         host.requestDownload()
         appleTranslationStatus = host.status
         // The system asks the person; check again afterwards (also when it was cancelled) so the settings show the truth.
-        Task { for _ in 0..<40 { try? await Task.sleep(nanoseconds: 3_000_000_000); await host.refreshAvailability(); appleTranslationStatus = host.status; appleTranslationInstalled = host.isInstalled; appleTranslationCanDownload = host.canDownload; if host.isInstalled { break } } }
+        Task { for _ in 0..<40 { try? await Task.sleep(nanoseconds: 3_000_000_000); await host.refreshAvailability(); applyAppleStatus(host); if host.isInstalled { break } } }
     }
 
-    /// The Mac is needed when anything (translation or meanings) is made there.
-    var usesMac: Bool { translationEngine == .mac || meaningEngine == .mac }
-    /// Page translation depends on the Mac (as the main engine or as the first choice before the fallback).
-    var translationNeedsMac: Bool { translationEngine == .mac }
-    /// Something can translate pages right now: an engine on the iPhone, a fallback to it, or a configured Mac (see `EngineRules`).
-    var translationAvailable: Bool { EngineRules.translationAvailable(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
-    var meaningAvailable: Bool { EngineRules.meaningAvailable(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
-
-    func serverSettingsChanged() { syncPins(); configChanged(); startMeaningWorker() }
-
-    /// The certificate each paired server must present (empty when the server is not paired over https).
-    func syncPins() {
-        var pins: [String: String] = [:]
-        if let cfg = settings.serverConfig(), let fp = cfg.pinnedFingerprint {
-            for url in cfg.candidates { if let host = url.host { pins[host.lowercased()] = fp } }
-        }
-        urlTransport.setPins(pins)
-    }
-
-    // MARK: pairing (QR code or pasted text from the Mac)
-    /// Parse what the camera / clipboard gave us. Nothing is applied until the person confirms.
-    func receivePairing(_ raw: String) {
-        pairingResult = nil
-        pairingPromptVisible = false
-        switch PairingPayload.parse(raw) {
-        case .success(let p): pairingError = nil; pendingPairing = p
-        case .failure(let e): pendingPairing = nil; pairingError = e.message
-        }
-        pairingNonce += 1          // the screen closes any sheet, waits a moment, then shows the prompt
-    }
-
-    func cancelPairing() { pendingPairing = nil; pairingPromptVisible = false }
-
-    func confirmPairing() {
-        guard let p = pendingPairing else { return }
-        pendingPairing = nil
-        pairingPromptVisible = false
-        do {
-            try settings.apply(p)
-        } catch {
-            pairingError = "ペアリングを保存できませんでした（キーチェーンまたは設定）。"
-            return
-        }
-        pairingError = nil
-        serverSettingsChanged()
-        Task {
-            var report = await checkConnection()
-            if report.state == .failed {
-                // The first request after the local-network permission dialog often fails: try once more.
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                let again = await checkConnection()
-                if again.state != .failed { report = again }
-            }
-            connection = report
-            pairingResult = report.state == .ok ? "ペアリングしました。" + report.message : "保存しました。ただし確認で問題がありました: " + report.message + "（ホーム画面の「もう一度確認」で再確認できます）"
-            if report.state == .ok { active.recoverIfNeeded(); warmupIfNeeded() }
-        }
-    }
+    /// Apple Intelligence can make meaning cards right now (otherwise a saved word would wait for it forever).
+    var meaningCanRun: Bool { deviceEngines.definitionEngine() != nil && foundationModelsProblem == nil }
+    /// Something can translate pages: the chosen engine exists on this device (its own state is shown separately).
+    var translationAvailable: Bool { deviceEngines.translationEngine(translationEngine) != nil }
 
     func setAllowedHosts(_ hosts: [String]) {
         let cleaned = hosts.compactMap(SitePolicy.normalizeEntry)
@@ -461,7 +389,6 @@ final class AppModel: ObservableObject {
         let host = (pageURL?.host ?? "").lowercased().replacingOccurrences(of: "^www\\.", with: "", options: .regularExpression)
         lookupSession = LookupSession(request: request, source: isPaste ? DictionaryData.pasteSource : host,
                                       sourceURL: isPaste ? nil : pageURL, existingEntry: nil)
-        warmupIfNeeded()
     }
 
     /// A session for something already in the dictionary (the card is attached to that entry).
@@ -489,10 +416,10 @@ final class AppModel: ObservableObject {
     func saveWordWithContext(request: LookupRequest, session: LookupSession) -> SaveOutcome {
         var copy = dictionary
         let result: DictionaryData.AddResult
-        if settings.autoMeaning {
+        if settings.autoMeaning && meaningCanRun {
             result = copy.addPendingWord(request.term, contextEnglish: request.contextEnglish, contextJapanese: request.contextJapanese,
                                          source: session.source, sourceURL: session.sourceURL)
-        } else {                // no background lookup: the sentence stands in for the meaning
+        } else {                // no background lookup (switched off, or Apple Intelligence cannot run): the sentence stands in for the meaning
             result = copy.add(english: request.term, japanese: request.contextJapanese.isEmpty ? request.term : request.contextJapanese,
                               source: session.source, sourceURL: session.sourceURL, kind: .word, card: nil,
                               contextEnglish: request.contextEnglish, contextJapanese: request.contextJapanese)
@@ -510,11 +437,11 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: meanings in the background
-    /// Looks up the meaning of every saved word that has none yet, one at a time, when the Mac is not busy translating.
-    /// Transient trouble (the Mac asleep, busy) is retried later with a growing pause; a bad answer is tried three times, then the
+    /// Looks up the meaning of every saved word that has none yet, one at a time, when nothing is being translated.
+    /// Transient trouble (the model busy or not ready) is retried later with a growing pause; a bad answer is tried three times, then the
     /// entry is marked "failed" (the person can ask again from the entry). Wrong settings stop it until they are fixed.
     func startMeaningWorker() {
-        guard settings.autoMeaning, meaningWorker == nil, meaningAvailable, !dictionary.pendingWords.isEmpty else { return }
+        guard settings.autoMeaning, meaningWorker == nil, deviceEngines.definitionEngine() != nil, !dictionary.pendingWords.isEmpty else { return }
         meaningWorker = Task { [weak self] in
             await self?.runMeaningWorker()
             self?.meaningWorker = nil
@@ -552,9 +479,9 @@ final class AppModel: ObservableObject {
             case .failure(let f):
                 switch f {
                 case .cancelled: return
-                case .unauthorized, .notConfigured, .pinMismatch, .certificateUntrusted, .deviceUnavailable: return      // settings first; restarted when they change
-                case .unreachable, .timeout, .busy, .stale, .breakerOpen, .limitReached: retryMeaningLater(entry.id)
-                case .invalidResponse, .server, .rejected, .deviceFailed:
+                case .unavailable: return                      // Apple Intelligence is off / not supported: restarted when the app comes back to the front
+                case .stale, .limitReached: retryMeaningLater(entry.id)
+                case .failed, .rejected:
                     meaningAttempts[entry.id, default: 0] += 1
                     if meaningAttempts[entry.id, default: 0] >= 3 { markMeaningFailed(entry.id) } else { retryMeaningLater(entry.id, base: 20) }
                 }
@@ -666,28 +593,6 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: misc
-    /// Wake the model on the Mac in the background (it takes seconds when it has been idle).
-    func warmupIfNeeded() {
-        guard settings.serverConfig() != nil, translationNeedsMac else { return }
-        Task { _ = await service.warmupIfStale() }
-    }
-
     /// Hands a URL to Safari / another app. Only ever called from a button the user pressed.
     func openOutside(_ url: URL) { UIApplication.shared.open(url) }
-
-    /// First launch: nothing works until the server is set, so open the settings.
-    var needsSetup: Bool { EngineRules.needsMacSetup(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
-
-    func checkConnection() async -> ConnectionReport {
-        await ConnectionChecker.check(config: settings.serverConfig(), transport: transport, resolver: resolver)
-    }
-
-    func refreshConnectionStatus() {
-        guard translationNeedsMac, settings.serverConfig() != nil, !checkingConnection else { return }
-        checkingConnection = true
-        Task {
-            connection = await checkConnection()
-            checkingConnection = false
-        }
-    }
 }

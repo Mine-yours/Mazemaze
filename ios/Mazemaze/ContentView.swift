@@ -27,7 +27,7 @@ struct ContentView: View {
             .fullScreenCover(isPresented: $model.showPaste) { PasteTranslateView().environmentObject(model) }
             .onAppear {
                 #if DEBUG
-                // Screenshots only (simulator): open a sheet or a pairing prompt from a launch argument.
+                // Screenshots only (simulator): open a sheet from a launch argument.
                 switch SelfTest.value("-MazemazeShow") {
                 case "tabs"?: showTabs = true; return
                 case "settings"?: showSettings = true; return
@@ -53,7 +53,6 @@ struct ContentView: View {
                         }
                     }
                     showDictionary = true; return
-                case "pairing"?: if let p = SelfTest.value("-MazemazePairGood") { model.receivePairing(p) }; return
                 default: break
                 }
                 // Stress: open the tab list while a translation is running, then pick another tab.
@@ -77,10 +76,10 @@ struct ContentView: View {
                 }
                 #endif
                 model.refreshEngineStatus()
-                if model.needsSetup { showSettings = true } else { model.warmupIfNeeded(); model.startMeaningWorker() }
+                model.startMeaningWorker()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.refreshEngineStatus(); model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
+                if phase == .active { model.refreshEngineStatus(); model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
             }
             .onChange(of: model.pasteNonce) { _ in
@@ -92,42 +91,10 @@ struct ContentView: View {
                     model.presentPaste()
                 }
             }
-            .onChange(of: model.pairingNonce) { _ in
-                // An alert cannot appear above an open sheet: close them, let the animation finish, then ask.
-                showSettings = false; showTabs = false; showDictionary = false; model.lookupSession = nil; if model.showPaste { model.closePaste() }
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 450_000_000)
-                    model.pairingPromptVisible = true
-                }
-            }
-            .alert(model.pendingPairing?.isEncrypted == false ? "暗号化なしでペアリングしますか？" : "このMacとペアリングしますか？",
-                   isPresented: Binding(get: { model.pairingPromptVisible && model.pendingPairing != nil }, set: { if !$0 && model.pendingPairing != nil { model.cancelPairing() } })) {
-                Button("ペアリングする") { model.confirmPairing() }
-                Button("キャンセル", role: .cancel) { model.cancelPairing() }
-            } message: { Text(pairingSummary(model.pendingPairing, downgrade: model.settings.pinnedFingerprint != nil && model.pendingPairing?.isEncrypted == false)) }
-            .alert("ペアリング", isPresented: Binding(get: { (model.pairingPromptVisible && model.pairingError != nil) || model.pairingResult != nil }, set: { if !$0 { model.pairingError = nil; model.pairingResult = nil; model.pairingPromptVisible = false } })) {
-                Button("OK", role: .cancel) {}
-            } message: { Text(model.pairingError ?? model.pairingResult ?? "") }
             .alert("タブ", isPresented: Binding(get: { model.tabNotice != nil }, set: { if !$0 { model.tabNotice = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(model.tabNotice ?? "") }
     }
-}
-
-/// What the person is asked to confirm before a pairing is applied: where, and whether it is encrypted.
-func pairingSummary(_ p: PairingPayload?, downgrade: Bool = false) -> String {
-    guard let p else { return "" }
-    var lines = ["Mac: \(p.name ?? p.host ?? p.ip ?? "?")", "アドレス: \(p.primaryURL.absoluteString)"]
-    if let f = p.fallbackURL { lines.append("予備のアドレス: \(f.absoluteString)") }
-    if let t = p.tailscaleURL { lines.append("外出先（Tailscale）: \(t.absoluteString)") }
-    if p.isEncrypted {
-        lines.append("通信: 暗号化あり。証明書の指紋 \(p.shortFingerprint ?? "") と同じ証明書を持つ Mac にだけ接続し、違う機器には接続しません（Mac の画面に出ている指紋の先頭と比べられます）。")
-    } else {
-        lines.append("通信: 暗号化なし（HTTP）。同じ Wi-Fi の人に、翻訳する文章とトークンを見られる可能性があります。")
-    }
-    if downgrade { lines.append("注意: いまは暗号化ありで接続していますが、暗号化なしに切り替わります。") }
-    lines.append("いまの接続設定は置き換わります。心当たりのない QR は使わないでください。")
-    return lines.joined(separator: "\n")
 }
 
 /// One tab on screen: address bar, page (or the home screen), status line and the toolbar.
