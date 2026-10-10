@@ -68,7 +68,7 @@ struct LookupSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 14) {
                             content
-                            Label("AI（Mac のローカルモデル）が作成した説明です。誤りがあるかもしれないので、気になるときは「標準辞書」でも確認してください。", systemImage: "info.circle")
+                            Label(aiNotice, systemImage: "info.circle")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
                         .padding(16)
@@ -173,6 +173,14 @@ struct LookupSheet: View {
                 .accessibilityAddTraits(r.id == request.id ? .isSelected : [])
             }
         }
+    }
+
+    /// Under the card: who made it (the engine that was used, not just the one chosen now).
+    private var aiNotice: String {
+        var who = "AI が"
+        if case .loaded(let card) = state { who = "AI（\(card.makerName)）が" }
+        else { who = "AI（\(model.meaningEngine == .mac ? "Mac のローカルモデル" : "iPhone の Apple Intelligence")）が" }
+        return who + "作成した説明です。誤りがあるかもしれないので、気になるときは「標準辞書」でも確認してください。"
     }
 
     // MARK: content

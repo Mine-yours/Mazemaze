@@ -21,6 +21,8 @@ public enum DefinitionOutcome: Equatable, Sendable {
 public enum TranslationFailure: Equatable, Sendable {
     case stale, cancelled, notConfigured, unauthorized, busy, unreachable, timeout, invalidResponse, limitReached, pinMismatch, certificateUntrusted
     case rejected(String), server(String), breakerOpen(Int)
+    /// The on-device engine cannot run (not supported, not enabled, language pack missing) / failed this time.
+    case deviceUnavailable(String), deviceFailed(String)
 
     public var code: String {
         switch self {
@@ -38,6 +40,17 @@ public enum TranslationFailure: Equatable, Sendable {
         case .rejected: return "rejected"
         case .server: return "server"
         case .breakerOpen: return "paused"
+        case .deviceUnavailable: return "device_unavailable"
+        case .deviceFailed: return "device_failed"
+        }
+    }
+
+    /// The Mac could not be used because of the connection (not because of a wrong token / certificate, which must
+    /// never be hidden behind a fallback): only then may the iPhone's own engine take over.
+    public var allowsDeviceFallback: Bool {
+        switch self {
+        case .unreachable, .timeout, .busy, .breakerOpen, .notConfigured: return true
+        default: return false
         }
     }
 
@@ -57,6 +70,7 @@ public enum TranslationFailure: Equatable, Sendable {
         case .pinMismatch: return "Mac の証明書が、ペアリングしたときと違います。別の機器になりすまされている可能性があります。信頼できる場合は、Mac に表示された QR でもう一度ペアリングしてください。"
         case .rejected(let m), .server(let m): return m
         case .breakerOpen(let s): return "翻訳サーバーのエラーが続いたため、約 \(s) 秒間停止します"
+        case .deviceUnavailable(let m), .deviceFailed(let m): return m
         }
     }
 }
@@ -104,6 +118,8 @@ public actor TranslationService {
     private let clock: ServiceClock
     private let options: Options
     private let resolver: EndpointResolver?
+    private let engines: DeviceEngineProvider?
+    private let enginePrefs: @Sendable () -> EnginePrefs
 
     /// Each browser tab is a scope with its own page generation, so one tab navigating never makes
     /// another tab's answers stale. Scope 0 is the default (single-page use and the tests).
@@ -127,8 +143,11 @@ public actor TranslationService {
                 prefs: @escaping @Sendable () -> (ratio: Double, unit: TranslationUnit),
                 clock: ServiceClock = SystemClock(),
                 options: Options = Options(),
-                resolver: EndpointResolver? = nil) {
+                resolver: EndpointResolver? = nil,
+                engines: DeviceEngineProvider? = nil,
+                enginePrefs: @escaping @Sendable () -> EnginePrefs = { EnginePrefs() }) {
         self.transport = transport; self.config = config; self.prefs = prefs; self.clock = clock; self.options = options; self.resolver = resolver
+        self.engines = engines; self.enginePrefs = enginePrefs
     }
 
     // MARK: generation
@@ -157,6 +176,7 @@ public actor TranslationService {
 
     /// Server URL / token / ratio changed: nothing cached for the old settings may be reused.
     public func configurationChanged() {
+        forgetMacReachability()
         cache.removeAll(); cacheOrder.removeAll()
         consecutiveFailures = 0; breakerOpenUntil = nil
         bumpAll()
@@ -164,6 +184,7 @@ public actor TranslationService {
 
     /// Forget past failures (breaker, last error) and move to a new generation.
     public func clearFailures() {
+        forgetMacReachability()
         consecutiveFailures = 0; breakerOpenUntil = nil; lastErrorDetail = nil
         bumpAll()
     }
@@ -252,6 +273,24 @@ public actor TranslationService {
     /// Ask the Mac for a card. The person is waiting, so it jumps the queue and is patient with a busy server.
     /// Results are kept in memory only (the dictionary stores the ones the person saves).
     public func define(_ request: LookupRequest, more: Bool = false, sense: String = "", background: Bool = false) async -> DefinitionOutcome {
+        let p = enginePrefs()
+        if p.meaning.runsOnDevice { return await defineOnDevice(request, more: more, sense: sense, background: background) }
+        if p.fallbackToDevice {
+            switch await macState() {
+            case .unreachable: return await defineOnDevice(request, more: more, sense: sense, background: background)
+            case .refused(let f): return .failure(f)          // a certificate problem is shown, never hidden behind the iPhone's engine
+            case .reachable: break
+            }
+        }
+        let outcome = await defineViaMac(request, more: more, sense: sense, background: background)
+        if p.fallbackToDevice, case .failure(let f) = outcome, f.allowsDeviceFallback, !Task.isCancelled {
+            forgetMacReachability()
+            return await defineOnDevice(request, more: more, sense: sense, background: background)
+        }
+        return outcome
+    }
+
+    func defineViaMac(_ request: LookupRequest, more: Bool, sense: String, background: Bool) async -> DefinitionOutcome {
         guard let cfg = config() else { return .failure(.notConfigured) }
         let key = cfg.baseURL.absoluteString + "|" + request.id + "|" + (more ? "more:" + sense : "basic")
         if let hit = defineCache[key] { return hit }
@@ -306,7 +345,7 @@ public actor TranslationService {
                     outcome = .more(m)
                 } else {
                     guard let card = DefinitionCard.decode(serverResponse: response.body) else { return .failure(.invalidResponse) }
-                    outcome = .success(card)
+                    outcome = .success(card.settingMaker(DefinitionCard.makerMac))
                 }
                 lastServerSuccess = clock.now()
                 defineCache[key] = outcome
@@ -340,6 +379,25 @@ public actor TranslationService {
 
     // MARK: translate
     public func translate(scope: Int = 0, gen: Int, text: String) async -> TranslationOutcome {
+        let p = enginePrefs()
+        if p.translation.runsOnDevice { return await translateOnDevice(p.translation, scope: scope, gen: gen, text: text) }
+        let fallback: TranslationEngineKind = p.deviceTranslation.runsOnDevice ? p.deviceTranslation : .appleTranslation
+        if p.fallbackToDevice {
+            switch await macState() {
+            case .unreachable: return await translateOnDevice(fallback, scope: scope, gen: gen, text: text)
+            case .refused(let f): return .failure(f)          // a certificate problem is shown, never hidden behind the iPhone's engine
+            case .reachable: break
+            }
+        }
+        let outcome = await translateViaMac(scope: scope, gen: gen, text: text)
+        if p.fallbackToDevice, case .failure(let f) = outcome, f.allowsDeviceFallback, !Task.isCancelled {
+            forgetMacReachability()
+            return await translateOnDevice(fallback, scope: scope, gen: gen, text: text)
+        }
+        return outcome
+    }
+
+    func translateViaMac(scope: Int, gen: Int, text: String) async -> TranslationOutcome {
         lastTranslateActivity = clock.now()
         defer { lastTranslateActivity = clock.now() }
         guard gen == generation(of: scope) else { return .failure(.stale) }
@@ -436,8 +494,11 @@ public actor TranslationService {
     /// failures are ignored (the real requests report their own errors). Returns true if it asked.
     @discardableResult
     public func warmupIfStale(staleAfter: TimeInterval = 20 * 60) async -> Bool {
+        let p = enginePrefs()
+        if p.translation.runsOnDevice { return false }                      // the Mac is not used: nothing to wake
         if let last = lastServerSuccess, clock.now() - last < staleAfter { return false }
         guard let cfg = config(), breakerRemaining() == nil else { return false }
+        if p.fallbackToDevice { guard case .reachable = await macState() else { return false } }
         guard await acquire(scope: activeScope, gen: generation(of: activeScope)) else { return false }
         defer { release() }
         var headers = ["Content-Type": "application/json", "Accept": "application/json"]
@@ -446,6 +507,140 @@ public actor TranslationService {
                                   headers: headers, body: Data("{}".utf8), timeout: 25)     // a warm-up must not hold the queue for minutes
         if let response = try? await transport.send(request), response.status == 200 { lastServerSuccess = clock.now() }
         return true
+    }
+
+    // MARK: the iPhone's own engines
+    enum MacState: Equatable { case reachable, unreachable, refused(TranslationFailure) }
+    private var macProbe: (state: MacState, at: TimeInterval)?
+    private var macProbeTask: Task<MacState, Never>?
+    private var macEpoch = 0
+
+    /// Forget what we knew about the Mac (it failed, or the settings changed). A probe that is still running belongs to the
+    /// old situation: it is detached and its answer is not kept.
+    func forgetMacReachability() { macProbe = nil; lastServerSuccess = nil; macProbeTask = nil; macEpoch += 1 }
+
+    /// With a fallback configured, ask the Mac a quick question before a long request, so an unreachable Mac is
+    /// noticed in seconds (not after the request timeout) and the iPhone's engine can take over. Remembered briefly,
+    /// and shared by requests that ask at the same time. A different certificate is reported as such (`.refused`).
+    func macState() async -> MacState {
+        guard let cfg = config() else { return .unreachable }
+        if let last = lastServerSuccess, clock.now() - last < 60 { return .reachable }
+        if let p = macProbe, clock.now() - p.at < (p.state == .reachable ? 60 : 10) { return p.state }
+        if let running = macProbeTask { return await running.value }
+        let epoch = macEpoch
+        // The quick question must really go out: the resolver's own memory of an answering address (120 s) may be older than the
+        // Mac's last words.
+        await resolver?.invalidate()
+        let task = Task<MacState, Never> { [resolver, transport] in
+            if let resolver {
+                if await resolver.check(cfg) != nil { return .reachable }
+                let probes = await resolver.lastProbes.map(\.outcome)
+                if probes.contains(.pinMismatch) { return .refused(.pinMismatch) }
+                if probes.contains(.certificateError) { return .refused(.certificateUntrusted) }
+                return .unreachable
+            }
+            let request = HTTPRequest(url: cfg.baseURL.appendingPathComponent("api/status"), method: "GET", headers: ["Accept": "application/json"], timeout: 3)
+            do {
+                let r = try await transport.send(request)
+                return EndpointResolver.looksLikeMazemaze(r) ? .reachable : .unreachable
+            } catch is PinMismatchError { return .refused(.pinMismatch) }
+            catch let e as URLError where ConnectionChecker.isCertificateError(e) { return .refused(.certificateUntrusted) }
+            catch { return .unreachable }
+        }
+        macProbeTask = task
+        let state = await task.value
+        if epoch == macEpoch { macProbeTask = nil; macProbe = (state, clock.now()) }          // not if the settings changed meanwhile
+        return state
+    }
+
+    private func translateOnDevice(_ kind: TranslationEngineKind, scope: Int, gen: Int, text: String) async -> TranslationOutcome {
+        lastTranslateActivity = clock.now()
+        defer { lastTranslateActivity = clock.now() }
+        guard gen == generation(of: scope) else { return .failure(.stale) }
+        guard BridgeMessage.validText(text) else { return .failure(.rejected("翻訳できないテキストです")) }
+        guard let engine = engines?.translationEngine(kind) else {
+            return .failure(.deviceUnavailable("この iPhone では「\(kind.title)」を使えません。設定で翻訳の方法を確認してください"))
+        }
+        let (ratio, unit) = prefs()
+        let key = CacheKey(server: "device:" + engine.identifier, text: text, ratioMilli: Int((ratio * 1000).rounded()), unit: unit)
+        if let hit = cached(key) { return .success(hit) }
+        if Task.isCancelled { return .failure(.cancelled) }
+
+        guard await acquire(scope: scope, gen: gen) else { return .failure(gen != generation(of: scope) ? .stale : .cancelled) }
+        defer { release() }
+        guard gen == generation(of: scope) else { return .failure(.stale) }
+        if let hit = cached(key) { return .success(hit) }
+        guard requestsInScope[scope, default: 0] < options.maxRequestsPerGeneration else { return .failure(.limitReached) }
+        requestsInScope[scope, default: 0] += 1
+        lastErrorDetail = nil
+
+        do {
+            let result = try await OnDeviceTranslator.translate(text: text, ratio: ratio, unit: unit, engine: engine)
+            if result.failedBatches == 0 { store(key, result.segments) }        // a partly Japanese result (a batch failed) is not kept: the next try may do better
+            return gen == generation(of: scope) ? .success(result.segments) : .failure(.stale)
+        } catch let e as EngineError {
+            switch e {
+            case .unavailable(let m): lastErrorDetail = "iPhone: 利用不可"; return .failure(.deviceUnavailable(m))
+            case .failed(let m): lastErrorDetail = "iPhone: 失敗"; return .failure(.deviceFailed(m + "（原文はそのままです。もう一度お試しください。続く場合は、設定で翻訳の方法を切り替えてください）"))
+            }
+        } catch is CancellationError {
+            return .failure(gen != generation(of: scope) ? .stale : .cancelled)
+        } catch {
+            lastErrorDetail = "iPhone: 内部エラー"
+            return .failure(.deviceFailed("この iPhone での翻訳に失敗しました。原文はそのままです"))
+        }
+    }
+
+    private func defineOnDevice(_ request: LookupRequest, more: Bool, sense: String, background: Bool) async -> DefinitionOutcome {
+        guard let engine = engines?.definitionEngine() else {
+            return .failure(.deviceUnavailable("この iPhone では単語の意味を作れません。設定で意味の作り方を確認してください"))
+        }
+        let key = "device:" + engine.identifier + "|" + request.id + "|" + (more ? "more:" + sense : "basic")
+        if let hit = defineCache[key] { return hit }
+        if Task.isCancelled { return .failure(.cancelled) }
+        let scope = background ? Self.backgroundScope : Self.lookupScope
+        if background {
+            while busy || (lastTranslateActivity.map { clock.now() - $0 < options.backgroundIdle } ?? false) {
+                do { try await clock.sleep(seconds: 2) } catch { return .failure(.cancelled) }
+                if Task.isCancelled { return .failure(.cancelled) }
+            }
+        }
+        let gen = generation(of: scope)
+        guard await acquire(scope: scope, gen: gen) else { return .failure(Task.isCancelled ? .cancelled : .stale) }
+        defer { release() }
+        guard gen == generation(of: scope) else { return .failure(.stale) }
+
+        let cleanSense = String(sense.unicodeScalars.prefix(60)).replacingOccurrences(of: "\u{0}", with: "")
+        let detail: DefinitionDetail = more ? .more : .basic
+        do {
+            let raw = try await engine.answer(kind: request.kind, detail: detail, term: request.term, contextEnglish: request.contextEnglish,
+                                              contextJapanese: request.contextJapanese, sense: cleanSense)
+            let content = OnDeviceDefinition.refine(kind: request.kind, detail: detail, term: request.term, contextEnglish: request.contextEnglish, content: raw)
+            guard let body = OnDeviceDefinition.serverResponse(kind: request.kind, detail: detail, content: content, contextJapanese: request.contextJapanese) else {
+                return .failure(.deviceFailed("この iPhone のモデルの答えを読み取れませんでした。もう一度お試しください"))
+            }
+            let outcome: DefinitionOutcome
+            if more {
+                guard let m = DefinitionMore.decode(serverResponse: body) else { return .failure(.deviceFailed("この iPhone のモデルの答えを読み取れませんでした。もう一度お試しください")) }
+                outcome = .more(m)
+            } else {
+                guard let card = DefinitionCard.decode(serverResponse: body) else { return .failure(.deviceFailed("この iPhone のモデルの答えを読み取れませんでした。もう一度お試しください")) }
+                outcome = .success(card.settingMaker(DefinitionCard.makerDevice))
+            }
+            defineCache[key] = outcome
+            defineOrder.removeAll { $0 == key }; defineOrder.append(key)
+            if defineOrder.count > 200, let oldest = defineOrder.first { defineOrder.removeFirst(); defineCache[oldest] = nil }
+            return outcome
+        } catch let e as EngineError {
+            switch e {
+            case .unavailable(let m): return .failure(.deviceUnavailable(m))
+            case .failed(let m): return .failure(.deviceFailed(m))
+            }
+        } catch is CancellationError {
+            return .failure(.cancelled)
+        } catch {
+            return .failure(.deviceFailed("この iPhone での意味の作成に失敗しました"))
+        }
     }
 
     private func baseURL(for cfg: ServerConfig) async -> URL {

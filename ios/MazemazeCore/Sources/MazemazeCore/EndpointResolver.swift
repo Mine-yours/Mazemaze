@@ -5,13 +5,14 @@ import Foundation
 /// token, so the token is never sent to a host that has not shown itself to be the server.
 /// What happened when one address was asked "are you a Mazemaze server?" (shown to help find a connection problem).
 public enum ProbeOutcome: Equatable, Sendable {
-    case answered, notMazemaze(status: Int), pinMismatch, timedOut, refused, notFound, unreachable(code: Int), failed
+    case answered, notMazemaze(status: Int), pinMismatch, certificateError, timedOut, refused, notFound, unreachable(code: Int), failed
 
     public var text: String {
         switch self {
         case .answered: return "応答あり"
         case .notMazemaze(let st): return "別の機器が応答（HTTP \(st)）"
         case .pinMismatch: return "証明書が違う"
+        case .certificateError: return "証明書を確認できない"
         case .timedOut: return "応答なし（時間切れ）"
         case .refused: return "接続拒否"
         case .notFound: return "名前が見つからない"
@@ -44,6 +45,18 @@ public actor EndpointResolver {
         guard cfg.candidates.count > 1 else { return cfg.baseURL }
         if let c = cache, c.key == cfg.candidates, clock.now() - c.at < ttl { return c.url }
         if let f = failedAt, f.key == cfg.candidates, clock.now() - f.at < failureMemory { return cfg.baseURL }
+        return await probeAll(cfg) ?? cfg.baseURL
+    }
+
+    /// The address that answered like a Mazemaze server, or nil when none did (even with a single address: this
+    /// asks, where `resolve` would just return it). The answer is remembered like `resolve`'s.
+    public func check(_ cfg: ServerConfig) async -> URL? {
+        if let c = cache, c.key == cfg.candidates, clock.now() - c.at < ttl { return c.url }
+        if let f = failedAt, f.key == cfg.candidates, clock.now() - f.at < failureMemory { return nil }
+        return await probeAll(cfg)
+    }
+
+    private func probeAll(_ cfg: ServerConfig) async -> URL? {
         // With a Tailscale address the home addresses get a short look first (at home they answer within a
         // moment), so being away does not mean waiting for every home address to time out before the last one.
         var probes: [ProbeResult] = []
@@ -60,7 +73,7 @@ public actor EndpointResolver {
         }
         cache = nil
         failedAt = (cfg.candidates, clock.now())
-        return cfg.baseURL
+        return nil
     }
 
     /// A Mazemaze server answers /api/status with its own JSON (status, or one of its error codes). Any
@@ -93,6 +106,7 @@ public actor EndpointResolver {
         do { response = try await transport.send(request) }
         catch is PinMismatchError { return .pinMismatch }
         catch let e as URLError {
+            if ConnectionChecker.isCertificateError(e) { return .certificateError }
             switch e.code {
             case .timedOut: return .timedOut
             case .cannotConnectToHost: return .refused

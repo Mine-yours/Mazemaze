@@ -1,6 +1,14 @@
 import SwiftUI
 import MazemazeCore
 
+/// Apple's translation session only exists inside a view, so a 1-point invisible view stays in the window (see DeviceEngines.swift).
+struct AppleTranslationHostContainer: View {
+    let model: AppModel
+    var body: some View {
+        if #available(iOS 18.0, *), let host = model.deviceEngines.appleHost { AppleTranslationHostView(host: host) }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
     @State private var showSettings = false
@@ -11,6 +19,7 @@ struct ContentView: View {
     var body: some View {
         PageScreen(tab: model.active, showSettings: $showSettings, showTabs: $showTabs, showDictionary: $showDictionary)
             .id(model.activeID)
+            .background { AppleTranslationHostContainer(model: model) }
             .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
             .sheet(isPresented: $showTabs) { TabSwitcherView().environmentObject(model) }
             .sheet(isPresented: $showDictionary) { DictionaryView().environmentObject(model) }
@@ -67,10 +76,11 @@ struct ContentView: View {
                     }
                 }
                 #endif
+                model.refreshEngineStatus()
                 if model.needsSetup { showSettings = true } else { model.warmupIfNeeded(); model.startMeaningWorker() }
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
+                if phase == .active { model.refreshEngineStatus(); model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.warmupIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
             }
             .onChange(of: model.pasteNonce) { _ in

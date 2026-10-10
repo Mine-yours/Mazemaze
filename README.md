@@ -92,6 +92,22 @@ Mazemaze には、**自分の iPhone に Xcode から入れて使う専用ブラ
 
 > **状態**: iPhone 実機で動作を確認済み（初版）。今回の更新（ホーム画面・タブ・QR ペアリング・暗号化・翻訳の高速化）は、シミュレータと自動テストで確認済みで、**実機での確認はこれから**です（`docs/ai/IPHONE_DEVICE_CHECKLIST.md`）。
 
+### iPhone だけで使う（Mac なし。任意）
+
+設定の「翻訳と意味の作り方」で、**ページの翻訳**と**単語・句の意味**を、それぞれ「Mac」か「iPhone」から選べます（既定は今までどおり Mac）。
+
+| 方法 | 内容 | 向き不向き |
+|---|---|---|
+| Mac（ローカルモデル） | Mac の Ollama（Qwen3.5 9B）。LAN / Tailscale 経由 | 今までどおり。訳が自然なことが多い |
+| iPhone: Apple 翻訳 | iOS 標準のオンデバイス翻訳（日本語→英語のデータを最初に一度ダウンロード） | 速く軽い。句を 1 つずつ訳すため文脈は見ない |
+| iPhone: Apple Intelligence | iOS 26 以降のオンデバイスの言語モデル（対応機種で、設定でオン） | 翻訳と、単語・句の意味カードに使える。モデルが小さく、訳や意味の質は Mac より落ちる |
+
+- iPhone を選んだ処理は、Mac も通信も使わず、文章は iPhone の外に出ません（Apple の Private Cloud Compute などのクラウドも使いません）。
+- どの方法でも、**置き換える場所の選び方・原文の保持・検査は同じ仕組み**（Mac のサーバーと同じロジックを Swift に移したもので、Python と同じ結果になることを数千件のテストで確認しています）。検証できなかった箇所は日本語のままです。
+- 「Mac に繋がらないとき、iPhone で処理する」を入れると、Mac に届かないとき（外出先で Tailscale が切れている等）だけ iPhone の方法に切り替わります。トークンや証明書の問題は隠さず、そのまま表示します。
+- 単語の意味は、標準辞書（iPhone の辞書）が主です。「この文での意味（AI）」を iPhone の Apple Intelligence で作ることもできます。
+- Apple 翻訳のデータは、設定の「翻訳データをダウンロード」から入れます（システムの確認画面が出ます）。
+
 ### 必要なもの
 - Mac に Xcode（App Store から。この開発では Xcode 26.1 を使用）
 - Apple ID（無料でよい。**無料の Apple ID で入れたアプリは 7 日で期限切れ**になり、Mac から入れ直します）
@@ -217,6 +233,13 @@ Mazemaze には、**自分の iPhone に Xcode から入れて使う専用ブラ
 ```
 
 テストは実際の Ollama には接続しません（ネットワーク遮断あり）。
+
+iPhone 版のロジック（`ios/MazemazeCore/.../OnDevice/`）は、Python の `backend/` を基準にしています。Python 側を変えたら、正解データを作り直してから Swift のテストを回してください。
+
+```bash
+.venv/bin/python scripts/gen_ondevice_golden.py     # 正解データ（ios/MazemazeCore/Tests/.../Resources/ondevice_golden.json）
+cd ios/MazemazeCore && swift test                    # Swift の出力が Python と一致するか
+```
 
 ## うまく動かないとき
 

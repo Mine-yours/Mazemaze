@@ -38,6 +38,17 @@ final class AppModel: ObservableObject {
     @Published var unit: TranslationUnit { didSet { if oldValue != unit { settings.unit = unit; configChanged() } } }
     @Published var allowedHosts: [String]
 
+    // Where translations and word meanings are made: the Mac, or this iPhone (Apple Translation / Apple Intelligence).
+    let deviceEngines: DeviceEngines
+    @Published var translationEngine: TranslationEngineKind { didSet { if oldValue != translationEngine { settings.translationEngine = translationEngine; engineChanged() } } }
+    @Published var meaningEngine: MeaningEngineKind { didSet { if oldValue != meaningEngine { settings.meaningEngine = meaningEngine; engineChanged() } } }
+    @Published var fallbackToDevice: Bool { didSet { if oldValue != fallbackToDevice { settings.fallbackToDevice = fallbackToDevice; engineChanged() } } }
+    @Published var deviceTranslation: TranslationEngineKind { didSet { if oldValue != deviceTranslation { settings.deviceTranslation = deviceTranslation; engineChanged() } } }
+    @Published private(set) var appleTranslationStatus = "確認していません"
+    @Published private(set) var appleTranslationInstalled = false
+    @Published private(set) var appleTranslationCanDownload = false
+    @Published private(set) var foundationModelsProblem: String?
+
     // Dictionary (expressions the person saved; this iPhone only)
     let dictionaryStorage: DictionaryStorage
     let dictionaryEmbedMarker: CrashMarker           // around showing the iPhone's dictionary inside the sheet
@@ -98,6 +109,11 @@ final class AppModel: ObservableObject {
         ratio = store.ratio
         unit = store.unit
         allowedHosts = store.allowedHosts
+        translationEngine = store.translationEngine
+        meaningEngine = store.meaningEngine
+        fallbackToDevice = store.fallbackToDevice
+        deviceTranslation = store.deviceTranslation
+        deviceEngines = DeviceEngines()
         restoreTabsEnabled = store.restoreTabs
         recentsEnabled = store.recentsEnabled
         sitePolicy = SitePolicy(allowedHosts: store.allowedHosts, allowInsecureLocalhost: debugAllowLocalhost)
@@ -123,11 +139,20 @@ final class AppModel: ObservableObject {
         #if DEBUG
         if let idle = arg("-MazemazeBackgroundIdle").flatMap(Double.init) { serviceOptions.backgroundIdle = idle }       // tests do not wait 15 s
         #endif
+        var engineProvider: DeviceEngineProvider = deviceEngines
+        #if DEBUG
+        if arg("-MazemazeFakeEngines") == "1" { engineProvider = FakeDeviceEngines() }          // tests: deterministic engines, no system model
+        if let mode = arg("-MazemazeEngine").flatMap(TranslationEngineKind.init(rawValue:)) { store.translationEngine = mode; translationEngine = mode }
+        if let mode = arg("-MazemazeMeaningEngine").flatMap(MeaningEngineKind.init(rawValue:)) { store.meaningEngine = mode; meaningEngine = mode }
+        if arg("-MazemazeFallbackToDevice") == "1" { store.fallbackToDevice = true; fallbackToDevice = true }
+        #endif
         service = TranslationService(transport: urlTransport,
                                      config: { s.serverConfig() },
                                      prefs: { (s.ratio, s.unit) },
                                      options: serviceOptions,
-                                     resolver: resolver)
+                                     resolver: resolver,
+                                     engines: engineProvider,
+                                     enginePrefs: { s.enginePrefs })
         syncPins()
         startTabs(initialURL: initialURL)
         Task { [service, id = activeID] in await service.setActiveScope(id) }
@@ -304,6 +329,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// An engine setting changed: pages translate again with the new engine, pending meanings use the new one.
+    func engineChanged() {
+        configChanged()
+        startMeaningWorker()
+        refreshEngineStatus()
+    }
+
+    /// What the iPhone's engines can do right now (shown in the settings and on the home screen).
+    func refreshEngineStatus() {
+        foundationModelsProblem = DeviceEngines.foundationModelsProblem()
+        if #available(iOS 18.0, *), let host = deviceEngines.appleHost {
+            Task { await host.refreshAvailability(); appleTranslationStatus = host.status; appleTranslationInstalled = host.isInstalled; appleTranslationCanDownload = host.canDownload }
+        } else { appleTranslationStatus = "iOS 18 以降が必要です"; appleTranslationInstalled = false; appleTranslationCanDownload = false }
+    }
+
+    func requestAppleTranslationDownload() {
+        guard #available(iOS 18.0, *), let host = deviceEngines.appleHost else { return }
+        host.requestDownload()
+        appleTranslationStatus = host.status
+        // The system asks the person; check again afterwards (also when it was cancelled) so the settings show the truth.
+        Task { for _ in 0..<40 { try? await Task.sleep(nanoseconds: 3_000_000_000); await host.refreshAvailability(); appleTranslationStatus = host.status; appleTranslationInstalled = host.isInstalled; appleTranslationCanDownload = host.canDownload; if host.isInstalled { break } } }
+    }
+
+    /// The Mac is needed when anything (translation or meanings) is made there.
+    var usesMac: Bool { translationEngine == .mac || meaningEngine == .mac }
+    /// Page translation depends on the Mac (as the main engine or as the first choice before the fallback).
+    var translationNeedsMac: Bool { translationEngine == .mac }
+    /// Something can translate pages right now: an engine on the iPhone, a fallback to it, or a configured Mac (see `EngineRules`).
+    var translationAvailable: Bool { EngineRules.translationAvailable(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
+    var meaningAvailable: Bool { EngineRules.meaningAvailable(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
+
     func serverSettingsChanged() { syncPins(); configChanged(); startMeaningWorker() }
 
     /// The certificate each paired server must present (empty when the server is not paired over https).
@@ -458,7 +514,7 @@ final class AppModel: ObservableObject {
     /// Transient trouble (the Mac asleep, busy) is retried later with a growing pause; a bad answer is tried three times, then the
     /// entry is marked "failed" (the person can ask again from the entry). Wrong settings stop it until they are fixed.
     func startMeaningWorker() {
-        guard settings.autoMeaning, meaningWorker == nil, settings.serverConfig() != nil, !dictionary.pendingWords.isEmpty else { return }
+        guard settings.autoMeaning, meaningWorker == nil, meaningAvailable, !dictionary.pendingWords.isEmpty else { return }
         meaningWorker = Task { [weak self] in
             await self?.runMeaningWorker()
             self?.meaningWorker = nil
@@ -496,9 +552,9 @@ final class AppModel: ObservableObject {
             case .failure(let f):
                 switch f {
                 case .cancelled: return
-                case .unauthorized, .notConfigured, .pinMismatch, .certificateUntrusted: return      // settings first; restarted when they change
+                case .unauthorized, .notConfigured, .pinMismatch, .certificateUntrusted, .deviceUnavailable: return      // settings first; restarted when they change
                 case .unreachable, .timeout, .busy, .stale, .breakerOpen, .limitReached: retryMeaningLater(entry.id)
-                case .invalidResponse, .server, .rejected:
+                case .invalidResponse, .server, .rejected, .deviceFailed:
                     meaningAttempts[entry.id, default: 0] += 1
                     if meaningAttempts[entry.id, default: 0] >= 3 { markMeaningFailed(entry.id) } else { retryMeaningLater(entry.id, base: 20) }
                 }
@@ -612,7 +668,7 @@ final class AppModel: ObservableObject {
     // MARK: misc
     /// Wake the model on the Mac in the background (it takes seconds when it has been idle).
     func warmupIfNeeded() {
-        guard settings.serverConfig() != nil else { return }
+        guard settings.serverConfig() != nil, translationNeedsMac else { return }
         Task { _ = await service.warmupIfStale() }
     }
 
@@ -620,14 +676,14 @@ final class AppModel: ObservableObject {
     func openOutside(_ url: URL) { UIApplication.shared.open(url) }
 
     /// First launch: nothing works until the server is set, so open the settings.
-    var needsSetup: Bool { settings.serverConfig() == nil }
+    var needsSetup: Bool { EngineRules.needsMacSetup(settings.enginePrefs, hasServerConfig: settings.serverConfig() != nil) }
 
     func checkConnection() async -> ConnectionReport {
         await ConnectionChecker.check(config: settings.serverConfig(), transport: transport, resolver: resolver)
     }
 
     func refreshConnectionStatus() {
-        guard !checkingConnection else { return }
+        guard translationNeedsMac, settings.serverConfig() != nil, !checkingConnection else { return }
         checkingConnection = true
         Task {
             connection = await checkConnection()

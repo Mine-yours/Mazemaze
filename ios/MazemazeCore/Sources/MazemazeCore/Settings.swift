@@ -48,6 +48,10 @@ public final class SettingsStore: @unchecked Sendable {
         static let autoHideBars = "mazemaze.autoHideBars"
         static let embedDictionary = "mazemaze.embedDictionary"
         static let autoMeaning = "mazemaze.autoMeaning"
+        static let translationEngine = "mazemaze.engine.translation"
+        static let meaningEngine = "mazemaze.engine.meaning"
+        static let fallbackToDevice = "mazemaze.engine.fallbackToDevice"
+        static let deviceTranslation = "mazemaze.engine.deviceTranslation"
         static let embedDictionaryCrashed = "mazemaze.embedDictionaryCrashed"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
@@ -97,6 +101,31 @@ public final class SettingsStore: @unchecked Sendable {
     public var safariIdentityForX: Bool {
         get { defaults.object(forKey: Key.safariIdentityForX) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
+    }
+
+    /// Which engine translates and which makes word meanings: the Mac (default, as before) or the iPhone itself.
+    public var translationEngine: TranslationEngineKind {
+        get { defaults.string(forKey: Key.translationEngine).flatMap(TranslationEngineKind.init(rawValue:)) ?? .mac }
+        set { defaults.set(newValue.rawValue, forKey: Key.translationEngine) }
+    }
+    public var meaningEngine: MeaningEngineKind {
+        get { defaults.string(forKey: Key.meaningEngine).flatMap(MeaningEngineKind.init(rawValue:)) ?? .mac }
+        set { defaults.set(newValue.rawValue, forKey: Key.meaningEngine) }
+    }
+    /// Use the iPhone's own engine when the Mac cannot be reached (off by default).
+    public var fallbackToDevice: Bool {
+        get { defaults.object(forKey: Key.fallbackToDevice) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Key.fallbackToDevice) }
+    }
+    /// The iPhone engine that takes over when the Mac cannot be reached (translation). Never `.mac`.
+    public var deviceTranslation: TranslationEngineKind {
+        get { defaults.string(forKey: Key.deviceTranslation).flatMap(TranslationEngineKind.init(rawValue:)).flatMap { $0.runsOnDevice ? $0 : nil } ?? .appleTranslation }
+        set { defaults.set((newValue.runsOnDevice ? newValue : .appleTranslation).rawValue, forKey: Key.deviceTranslation) }
+    }
+    public var enginePrefs: EnginePrefs {
+        var p = EnginePrefs()
+        p.translation = translationEngine; p.meaning = meaningEngine; p.fallbackToDevice = fallbackToDevice; p.deviceTranslation = deviceTranslation
+        return p
     }
 
     /// A word saved from the iPhone's dictionary gets its meaning looked up in the background (on by default).

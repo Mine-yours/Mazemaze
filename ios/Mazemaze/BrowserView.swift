@@ -397,7 +397,7 @@ final class BrowserCoordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WK
             try? await Task.sleep(nanoseconds: 9_000_000_000)
             guard let self, !Task.isCancelled, let web = self.webView else { return }
             guard self.app.decision(for: web.url).isAllowed, self.app.translationEnabled, !self.tab.suspendedForPage,
-                  self.app.settings.serverConfig() != nil, self.tab.blockedNavigation == nil,
+                  self.app.translationAvailable, self.tab.blockedNavigation == nil,
                   self.tab.inflight == 0, self.tab.okCount == 0, self.tab.failCount == 0, self.tab.lastProblem == nil else { return }
             let st = await self.statusFromPage()
             let enabled = (st["enabled"] as? Bool) ?? ((st["enabled"] as? Int) == 1)

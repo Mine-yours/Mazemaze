@@ -52,7 +52,7 @@ LOG="$(mktemp)"
 set +e
 xcrun simctl launch --console --terminate-running-process "$DEVICE" "$BUNDLE_ID" \
   -MazemazeSelfTest 1 -MazemazeAllowLocalhost 1 -MazemazeAPI "http://$IP:$API_PORT" -MazemazeToken "$TOKEN" \
-  -MazemazeBackgroundIdle 0 -MazemazeStartURL "http://localhost:$SITE_PORT" -MazemazePairGood "$PAIR_GOOD" -MazemazePairWrongPin "$PAIR_WRONG" 2>&1 | tee "$LOG"
+  -MazemazeBackgroundIdle 0 -MazemazeFakeEngines 1 -MazemazeStartURL "http://localhost:$SITE_PORT" -MazemazePairGood "$PAIR_GOOD" -MazemazePairWrongPin "$PAIR_WRONG" 2>&1 | tee "$LOG"
 set -e
 # The server log must not contain any page text (the test pages are full of Japanese sentences).
 if python3 -c "import re,sys; sys.exit(0 if re.search(r'[\u3040-\u30ff\u3400-\u9fff]', open(sys.argv[1], encoding='utf-8', errors='replace').read()) else 1)" "$APILOG"; then echo "FAIL: API log contains Japanese text"; exit 1; else echo "OK: API server log contains no Japanese text ($(wc -l < "$APILOG" | tr -d ' ') lines)"; fi

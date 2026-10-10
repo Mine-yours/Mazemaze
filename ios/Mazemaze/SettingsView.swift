@@ -99,7 +99,43 @@ struct SettingsView: View {
                     Toggle("保存した単語の意味を、裏で自動で調べる", isOn: $autoMeaning)
                         .onChange(of: autoMeaning) { v in model.settings.autoMeaning = v; model.settings.flush(); if v { model.startMeaningWorker() } }
                 } footer: {
-                    Text("標準辞書から単語を保存すると、Mac のローカルモデルが、その文での意味を調べて項目に入れます。翻訳を優先するため、しばらく翻訳がない間に、1 件ずつ調べます。Mac が止まっているときは、あとで自動でやり直します。")
+                    Text("標準辞書から単語を保存すると、「単語・句の意味」で選んだ方法（Mac のモデルか iPhone の Apple Intelligence）が、その文での意味を調べて項目に入れます。翻訳を優先するため、しばらく翻訳がない間に、1 件ずつ調べます。使えないときは、あとで自動でやり直します。")
+                }
+
+                Section {
+                    Picker("ページの翻訳", selection: $model.translationEngine) {
+                        ForEach(TranslationEngineKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Text(model.translationEngine.hint).font(.footnote).foregroundStyle(.secondary)
+                    if model.translationEngine == .appleTranslation || (model.fallbackToDevice && model.deviceTranslation == .appleTranslation) {
+                        Label("Apple 翻訳: \(model.appleTranslationStatus)", systemImage: model.appleTranslationInstalled ? "checkmark.circle" : "arrow.down.circle")
+                            .font(.footnote).foregroundStyle(model.appleTranslationInstalled ? Color.green : Color.orange)
+                        if model.appleTranslationCanDownload {
+                            Button("翻訳データをダウンロード（システムの確認が出ます）") { model.requestAppleTranslationDownload() }.frame(minHeight: 44)
+                        }
+                    }
+                    Picker("単語・句の意味", selection: $model.meaningEngine) {
+                        ForEach(MeaningEngineKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Text(model.meaningEngine.hint).font(.footnote).foregroundStyle(.secondary)
+                    if model.translationEngine == .foundationModels || model.meaningEngine == .foundationModels || (model.fallbackToDevice && model.deviceTranslation == .foundationModels) {
+                        if let problem = model.foundationModelsProblem {
+                            Label("Apple Intelligence: \(problem)", systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                        } else {
+                            Label("Apple Intelligence: 使えます", systemImage: "checkmark.circle").font(.footnote).foregroundStyle(.green)
+                        }
+                    }
+                    if model.usesMac || model.fallbackToDevice {
+                        Toggle("Mac に繋がらないとき、iPhone で代わりに処理する", isOn: $model.fallbackToDevice)
+                        if model.fallbackToDevice {
+                            Picker("そのときの翻訳", selection: $model.deviceTranslation) {
+                                ForEach(TranslationEngineKind.allCases.filter(\.runsOnDevice), id: \.self) { Text($0.title).tag($0) }
+                            }
+                            Text("そのときの単語の意味は、Apple Intelligence が作ります。").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: { Text("翻訳と意味の作り方") } footer: {
+                    Text("iPhone を選んだ処理は、ダウンロード済みのデータだけで動き、その文章は iPhone の外に出ません（Apple 翻訳のデータを取るときだけ通信します）。Mac を選んだ処理の文章は Mac に送られます。置き換える場所の選び方・原文の保持・検査は、どの方法でも同じです。")
                 }
 
                 Section("翻訳") {
@@ -140,7 +176,7 @@ struct SettingsView: View {
                     Toggle("X を Safari として開く", isOn: $xIdentity)
                         .onChange(of: xIdentity) { v in model.settings.safariIdentityForX = v; model.settings.flush() }
                 } header: { Text("翻訳するサイト") } footer: {
-                    Text("ここに登録したサイト（https のみ）だけ、本文を Mac に送って翻訳します。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。\n「X を Safari として開く」: X は、アプリ内ブラウザを Safari に誘導します。オンの間は、x.com / twitter.com に限り、Safari と同じ形式の UA を送り、Safari が持つ 2 つの目印（SchemaDataExtractor / MicrodataExtractor）を空の値で用意します。他のサイトには何もしません。オフにすると X は Safari へ誘導されます。変更は新しいタブから有効です。")
+                    Text("ここに登録したサイト（https のみ）だけ、本文を翻訳します（「翻訳と意味の作り方」で選んだ方法で。Mac を選んだときは Mac に送ります）。ログイン・DM・設定などのページは対象外です。リンクやボタンの文字は変えません。\n「X を Safari として開く」: X は、アプリ内ブラウザを Safari に誘導します。オンの間は、x.com / twitter.com に限り、Safari と同じ形式の UA を送り、Safari が持つ 2 つの目印（SchemaDataExtractor / MicrodataExtractor）を空の値で用意します。他のサイトには何もしません。オフにすると X は Safari へ誘導されます。変更は新しいタブから有効です。")
                 }
 
                 Section {
@@ -156,7 +192,7 @@ struct SettingsView: View {
                 }
 
                 Section("注意") {
-                    Text("\(model.settings.pinnedFingerprint != nil ? "Mac との通信は暗号化されています（ペアリングした証明書と同じ Mac にだけ接続します）。" : "Mac との通信は HTTP（暗号化なし）です。自宅など信頼できる Wi-Fi でだけ使ってください。")翻訳する文章はこのアプリから Mac のサーバーにだけ送られ、Mac 上の Ollama（ローカルモデル）で処理する設計です。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
+                    Text("\(model.settings.pinnedFingerprint != nil ? "Mac との通信は暗号化されています（ペアリングした証明書と同じ Mac にだけ接続します）。" : "Mac との通信は HTTP（暗号化なし）です。自宅など信頼できる Wi-Fi でだけ使ってください。")「Mac」を選んだ処理の文章は、このアプリから Mac のサーバーにだけ送られ、Mac 上の Ollama（ローカルモデル）で処理されます（インターネット上のサービスには送りません）。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
                         .font(.footnote)
                 }
             }
@@ -172,6 +208,7 @@ struct SettingsView: View {
                 autoHideBars = model.settings.autoHideBars
                 embedDictionary = model.settings.embedDictionary
                 autoMeaning = model.settings.autoMeaning
+                model.refreshEngineStatus()
             }
             .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft }; save() }
         }

@@ -65,6 +65,8 @@ public struct WordCard: Codable, Equatable, Sendable {
     public var matchInSource: String?
     public var phrases: [String]
     public var note: String?
+    /// Which engine made the card ("mac" or "device"); nil for cards saved before this was recorded (they all came from the Mac).
+    public var maker: String?
     /// True once "more" (an example, expressions, a remark) has been added.
     public var hasMore: Bool { phrases.contains { !$0.isEmpty } || note != nil || meanings.contains { $0.exampleEn != nil } }
 }
@@ -78,6 +80,7 @@ public struct PhraseCard: Codable, Equatable, Sendable {
     public var points: [PhrasePoint]
     public var synonyms: [String]
     public var examples: [PhraseExample]
+    public var maker: String?
     public var hasMore: Bool { !points.isEmpty || !synonyms.isEmpty || !examples.isEmpty }
 }
 
@@ -116,6 +119,23 @@ public enum DefinitionMore: Equatable, Sendable {
 public enum DefinitionCard: Equatable, Sendable {
     case word(WordCard)
     case phrase(PhraseCard)
+
+    public static let makerMac = "mac", makerDevice = "device"
+
+    /// The card with the engine that made it recorded (shown in the explanation under the card).
+    public func settingMaker(_ maker: String) -> DefinitionCard {
+        switch self {
+        case .word(var c): c.maker = maker; return .word(c)
+        case .phrase(var c): c.maker = maker; return .phrase(c)
+        }
+    }
+
+    public var maker: String? {
+        switch self { case .word(let c): return c.maker; case .phrase(let c): return c.maker }
+    }
+
+    /// Who made the card, for the note under it. A card without a record was made before the iPhone could make them: by the Mac.
+    public var makerName: String { maker == Self.makerDevice ? "iPhone の Apple Intelligence" : "Mac のローカルモデル" }
 
     /// One line for lists: the sense in context (word) or the meaning (phrase).
     public var headline: String {

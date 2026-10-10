@@ -169,10 +169,10 @@ final class TabModel: ObservableObject, Identifiable {
         switch d {
         case .allowed(let p):
             profile = p.rawValue
-            enabled = app.translationEnabled && !suspendedForPage && app.settings.serverConfig() != nil
+            enabled = app.translationEnabled && !suspendedForPage && app.translationAvailable
             if !app.translationEnabled { siteStatus = "翻訳: オフ" }
             else if suspendedForPage { siteStatus = "翻訳: このページは原文表示" }
-            else if app.settings.serverConfig() == nil { siteStatus = "翻訳: サーバー未設定（設定で入力）" }
+            else if !app.translationAvailable { siteStatus = "翻訳: サーバー未設定（設定で入力）" }
             else { siteStatus = "翻訳: オン" }
         case .denied(let reason):
             siteStatus = "翻訳しないページ: \(reason)"
@@ -213,7 +213,8 @@ final class TabModel: ObservableObject, Identifiable {
                 }
                 lastProblem = text
                 switch f {
-                case .unauthorized, .notConfigured, .unreachable, .pinMismatch, .certificateUntrusted: problemAction = .openSettings
+                case .unauthorized, .notConfigured, .unreachable, .pinMismatch, .certificateUntrusted, .deviceUnavailable: problemAction = .openSettings
+                case .deviceFailed: problemAction = .reload
                 default: problemAction = nil
                 }
                 siteStatus = "翻訳: エラー"

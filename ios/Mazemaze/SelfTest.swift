@@ -406,6 +406,63 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 800_000_000)
             if let w = first.webView { web = w }
 
+            // ---- The iPhone's own engines (fake, deterministic): translation and meanings without the Mac
+            if SelfTest.value("-MazemazeFakeEngines") == "1" {
+                let goodToken = app.settings.token
+                let goodURL = app.settings.serverURLString
+                try? app.settings.setToken("wrong-token")             // the Mac would refuse: any success below did not come from the Mac
+                app.translationEngine = .appleTranslation
+                await load("/static.html")
+                let beforeDevice = before          // the same page, read before anything was replaced (a fake engine answers instantly)
+                let viaDevice = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 30)
+                let shownDevice = (await inPage("return Array.from(document.querySelectorAll('[data-mz-en]')).map(e => e.textContent).join('|')")) as? String ?? ""
+                report("device engine: the page is translated by the iPhone's engine while the Mac would refuse (wrong token)", viaDevice && shownDevice.contains("Fake English") && (tab.lastProblem ?? "").isEmpty, "shown=\(shownDevice.prefix(80)) problem=\(tab.lastProblem ?? "-")")
+                _ = await inScript("const e = document.querySelector('[data-mz-en]'); e.click(); return 1")
+                let devicePopover = await inScript("const p = document.querySelector('[data-mazemaze-ui]'); return p ? p.textContent : null") as? String
+                report("device engine: tapping English still shows the original Japanese", (devicePopover ?? "").unicodeScalars.contains { $0.value >= 0x3040 }, devicePopover ?? "nil")
+                app.translationEnabled = false
+                let deviceRestored = await waitFor("return window.__mazemaze.status().replaced === 0 && !window.__mazemaze.status().enabled", seconds: 10)
+                let afterDeviceOff = (await inPage("return document.body.innerHTML")) as? String ?? ""
+                report("device engine: toggle OFF restores the original DOM exactly", deviceRestored && afterDeviceOff == beforeDevice)
+                app.translationEnabled = true
+
+                // No Mac configured at all: the iPhone's engine still translates pages (the page script must be told it may)
+                app.settings.serverURLString = ""
+                app.configChanged()
+                await load("/static.html")
+                let noMac = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 30)
+                report("device engine: with no Mac configured at all, pages are still translated", noMac && app.settings.serverConfig() == nil && !app.needsSetup, "needsSetup=\(app.needsSetup) status=\(tab.siteStatus)")
+                app.settings.serverURLString = goodURL
+                app.configChanged()
+
+                // Meanings from the iPhone's engine (validated like the Mac's answer)
+                app.meaningEngine = .foundationModels
+                let wordReq = LookupRequest.make(kind: .word, term: "have", contextEnglish: "I have lunch at noon", contextJapanese: "正午に昼食を食べます")!
+                let wordOut = await app.service.define(wordReq)
+                if case .success(.word(let card)) = wordOut { report("device engine: a word card comes from the iPhone's engine", card.lemma == "have" && card.contextMeaning == "食べる", card.contextMeaning) }
+                else { report("device engine: a word card comes from the iPhone's engine", false, "\(wordOut)") }
+
+                // Fallback: Mac first; an unreachable Mac hands over to the iPhone (a wrong token never does)
+                app.translationEngine = .mac
+                app.meaningEngine = .mac
+                app.fallbackToDevice = true
+                app.settings.serverURLString = "http://127.0.0.1:9"      // nothing listens here
+                app.configChanged()
+                await load("/static.html")
+                let viaFallback = await waitFor("return !!window.__mazemaze && window.__mazemaze.status().replaced > 0", seconds: 40)
+                let shownFallback = (await inPage("return Array.from(document.querySelectorAll('[data-mz-en]')).map(e => e.textContent).join('|')")) as? String ?? ""
+                report("fallback: an unreachable Mac hands the page to the iPhone's engine", viaFallback && shownFallback.contains("Fake English"), "shown=\(shownFallback.prefix(60)) problem=\(tab.lastProblem ?? "-")")
+                app.settings.serverURLString = goodURL
+                app.configChanged()
+                await load("/static.html")
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                let wrongTokenStatus = await statusJSON()
+                report("fallback: a wrong token is reported, never hidden behind the iPhone's engine", ((wrongTokenStatus["replaced"] as? Int) ?? 0) == 0 && (tab.lastProblem ?? "").contains("トークン"), "problem=\(tab.lastProblem ?? "-") status=\(wrongTokenStatus)")
+                app.fallbackToDevice = false
+                try? app.settings.setToken(goodToken)
+                app.configChanged()
+            }
+
             // Wrong token: the page keeps its original text and the user sees a clear message.
             let goodToken = app.settings.token
             try? app.settings.setToken("wrong-token")
@@ -445,6 +502,31 @@ enum SelfTest {
             print("SELFTEST DONE passed=\(passed) failed=\(failed)")
             fflush(stdout)
             exit(failed == 0 ? 0 : 1)
+        }
+    }
+}
+
+/// Deterministic stand-ins for the iPhone's engines (launch argument -MazemazeFakeEngines 1; tests only).
+final class FakeDeviceEngines: DeviceEngineProvider, @unchecked Sendable {
+    func translationEngine(_ kind: TranslationEngineKind) -> SpanTranslationEngine? { kind == .mac ? nil : FakeTranslationEngine() }
+    func definitionEngine() -> DefinitionEngine? { FakeMeaningEngine() }
+}
+
+final class FakeTranslationEngine: SpanTranslationEngine, @unchecked Sendable {
+    let identifier = "fake"
+    func translate(text: String, spans: [SelectedSpan]) async throws -> [String: String] {
+        Dictionary(uniqueKeysWithValues: spans.map { ($0.id, "Fake English \($0.id.dropFirst())") })
+    }
+}
+
+final class FakeMeaningEngine: DefinitionEngine, @unchecked Sendable {
+    let identifier = "fake-meaning"
+    func answer(kind: LookupKind, detail: DefinitionDetail, term: String, contextEnglish: String, contextJapanese: String, sense: String) async throws -> String {
+        switch (kind, detail) {
+        case (.word, .basic): return #"{"matchInSource":"食べ","senses":[{"gloss":"持つ"},{"gloss":"食べる"}],"contextIndex":1,"lemma":"have","pos":"動詞"}"#
+        case (.word, .more): return #"{"example":{"en":"I have a pen.","ja":"ペンを持っている。"},"phrases":["have to"],"note":""}"#
+        case (.phrase, .basic): return #"{"meaning":"昼食をとる","nuance":""}"#
+        case (.phrase, .more): return #"{"points":[{"expr":"have lunch","note":"食事をとる"}],"synonyms":["eat lunch"]}"#
         }
     }
 }

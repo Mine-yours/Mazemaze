@@ -122,7 +122,7 @@ private struct DictionaryDetailView: View {
                 if e.kind == .word {
                     Section("意味") {
                         if e.card == nil, e.meaning == .pending {
-                            HStack(spacing: 8) { ProgressView(); Text("調べています（Mac が空いたときに、自動で調べます）").foregroundStyle(.secondary) }
+                            HStack(spacing: 8) { ProgressView(); Text("調べています（空いたときに、自動で調べます）").foregroundStyle(.secondary) }
                         } else if e.card == nil, e.meaning == .failed {
                             Label("意味を取得できませんでした", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                             Button("もう一度、自動で調べる") { model.retryMeaning(entryID: e.id) }.frame(minHeight: 44)
@@ -141,7 +141,7 @@ private struct DictionaryDetailView: View {
                     if let card = e.card { CardContent(card: card) }
                     Button(e.card == nil ? "意味を調べる" : "意味を調べ直す") { lookup = model.lookupSession(for: e) }.frame(minHeight: 44)
                 } header: { Text(e.card == nil ? "詳しい意味" : "詳しい意味（AI が作成）") } footer: {
-                    if e.card == nil { Text("Mac のローカルモデルで、単語の意味や句の解説を調べて、この項目に残します。") }
+                    if e.card == nil { Text("「単語・句の意味」で選んだ方法（Mac のモデルか iPhone の Apple Intelligence）で、単語の意味や句の解説を調べて、この項目に残します。") }
                 }
                 Section("出典") {
                     Text(e.source.isEmpty ? "（不明）" : e.source)

@@ -71,8 +71,10 @@ struct PasteTranslateView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("この画面について", systemImage: "info.circle").font(.footnote).bold()
             Group {
-                Text("・貼り付けた文章は、Mac 上のローカルモデル（Ollama）だけで処理し、この iPhone のディスクにも保存しません（閉じると画面から消え、アプリを終了するとメモリからも消えます）。ただし、吹き出しの「辞書に保存」を押した表現や、調べた単語・意味（最大 300 文字）は、辞書に残ります。")
-                Text("・\(model.settings.pinnedFingerprint != nil ? "Mac との通信は暗号化されています。" : "Mac との通信は暗号化されていません（HTTP）。自宅など信頼できる Wi-Fi でだけ使い、他人に見られたくない文章は貼り付けないでください。")")
+                Text("・貼り付けた文章は、\(model.translationEngine == .mac ? "Mac 上のローカルモデル（Ollama）" : "この iPhone の中の「\(model.translationEngine.title)」")\(model.translationEngine == .mac && model.fallbackToDevice ? "（Mac に繋がらないときは iPhone の中）" : "")だけで処理し、この iPhone のディスクにも保存しません（閉じると画面から消え、アプリを終了するとメモリからも消えます）。ただし、吹き出しの「辞書に保存」を押した表現や、調べた単語・意味（最大 300 文字）は、辞書に残ります。")
+                if model.translationEngine == .mac {
+                    Text("・\(model.settings.pinnedFingerprint != nil ? "Mac との通信は暗号化されています。" : "Mac との通信は暗号化されていません（HTTP）。自宅など信頼できる Wi-Fi でだけ使い、他人に見られたくない文章は貼り付けないでください。")")
+                }
                 Text("・X などのページを自動で読み取ることはしません。コピーは手動です。他人の非公開の投稿や DM は貼り付けないでください。")
                 Text("・8 文字に満たない行や、日本語の少ない行は、そのまま残ります。")
             }
