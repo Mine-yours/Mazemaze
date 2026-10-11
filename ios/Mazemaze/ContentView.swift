@@ -105,7 +105,6 @@ struct PageScreen: View {
     @Binding var showTabs: Bool
     @Binding var showDictionary: Bool
     @FocusState private var addressFocused: Bool
-    @State private var pendingSearch: String?
     @State private var showProblemDetail = false
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var addressError: String?
@@ -119,15 +118,6 @@ struct PageScreen: View {
             if tab.showsHome { homeLayout } else { readingLayout }
         }
         .alert("エラーの内容", isPresented: $showProblemDetail) { Button("OK", role: .cancel) {} } message: { Text(tab.lastProblem ?? "") }
-        .confirmationDialog(searchDialogTitle, isPresented: Binding(get: { pendingSearch != nil }, set: { if !$0 { pendingSearch = nil } }), titleVisibility: .visible) {
-            Button("\(AddressInput.searchServiceName) で検索する") {
-                if let words = pendingSearch, let url = AddressInput.searchURL(for: words) { tab.navigate(to: url) }
-                pendingSearch = nil
-            }
-            Button("キャンセル", role: .cancel) { pendingSearch = nil }
-        } message: {
-            Text("入力した語句が、外部の検索サービス（\(AddressInput.searchServiceName)）に送られます。ページ本文の翻訳とは別の通信です。")
-        }
     }
 
     /// Home screen: the bars stay put. The address bar sits just above the toolbar (thumb reach, and a page that does
@@ -207,7 +197,6 @@ struct PageScreen: View {
         }
     }
 
-    private var searchDialogTitle: String { "「\((pendingSearch ?? "").prefix(30))」を検索" }
 
     // MARK: address bar
     private var addressBar: some View {
@@ -251,7 +240,8 @@ struct PageScreen: View {
         addressError = nil
         switch AddressInput.classify(tab.addressText) {
         case .url(let url): tab.navigate(to: url)
-        case .search(let words): pendingSearch = words          // asks first: the words leave this device
+        case .search(let words):
+            if let url = AddressInput.searchURL(for: words, engine: model.settings.searchEngine) { tab.navigate(to: url) }
         case .rejected: addressError = "このアドレスは開けません（http / https の URL か、検索したい語句を入力してください）"
         }
     }

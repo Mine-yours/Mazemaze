@@ -159,7 +159,7 @@ struct HomeView: View {
     private var privacyNote: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("検索について", systemImage: "magnifyingglass").font(.footnote).bold()
-            Text("アドレス欄に語句を入力して検索すると、その語句が外部の検索サービス（\(AddressInput.searchServiceName)）に送られます。送る前に確認が出ます。ページ本文の翻訳は、iPhone の中だけで処理されます。")
+            Text("アドレス欄に語句を入力して検索すると、その語句が、設定で選んだ検索サービス（\(model.settings.searchEngine.title)）に送られます。ページ本文の翻訳は、iPhone の中だけで処理されます。")
                 .font(.footnote).foregroundStyle(.secondary)
             Label("保存されるもの", systemImage: "internaldrive").font(.footnote).bold()
             Text("お気に入りと最近のサイトは、この iPhone にだけ保存されます。最近のサイトとタブの復元には、ログイン・メール・ネットバンキングなどを除いた公開ページの URL（検索条件や認証情報は含みません）だけが保存されます。")

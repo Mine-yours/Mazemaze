@@ -5,7 +5,7 @@
 
 - ページの翻訳の既定は Apple 翻訳。設定で Apple Intelligence も選べる。単語・句の意味は Apple Intelligence。標準辞書は別で常に使える。
 - 置き換える場所の選択・検証・表示整形・意味カードの検証は、Python から Swift に移したもの（`ios/MazemazeCore/.../OnDevice/`）。基準との一致は、約 1.4 万件の正解データで `OnDeviceGoldenTests` が確認する。
-- テスト（削除後）: `swift test` 131 件、DOM テスト 108 件、シミュレータ自己テスト 60 項目（偽エンジン）、Release ビルド OK。pytest は無くなった。
+- テスト（削除後）: `swift test` 133 件、DOM テスト 108 件、シミュレータ自己テスト 60 項目（偽エンジン）、Release ビルド OK。pytest は無くなった。
 - **実機は未確認**（`docs/ai/IPHONE_DEVICE_CHECKLIST.md`）。特に Apple 翻訳（見えない部品が設定・貼り付け画面の裏でも動くか、ダウンロードの確認画面が出るか）、Apple Intelligence の速さ・発熱・質。
 - 質の測定（Apple Intelligence、この Mac）と決定の理由・限界は `docs/ai/DECISIONS.md`。Apple 翻訳は未測定。
 - 以降の節は、Mac 版の時代の記録（サーバー・Web UI・評価・外出先など）。`main` には、その実装は無い。

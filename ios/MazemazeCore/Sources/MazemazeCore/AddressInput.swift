@@ -7,9 +7,6 @@ public enum AddressInput: Equatable {
     case search(String)
     case rejected
 
-    public static let searchHost = "duckduckgo.com"
-    public static let searchServiceName = "DuckDuckGo"
-
     public static func classify(_ raw: String) -> AddressInput {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value != 0x7F }) else { return .rejected }
@@ -32,11 +29,40 @@ public enum AddressInput: Equatable {
         return .search(text)
     }
 
-    /// https://duckduckgo.com/?q=<words>, with the words percent-encoded.
-    public static func searchURL(for words: String) -> URL? {
+    /// The results page of `engine` for these words (percent-encoded). Google by default.
+    public static func searchURL(for words: String, engine: SearchEngine = .google) -> URL? {
         var c = URLComponents()
-        c.scheme = "https"; c.host = searchHost; c.path = "/"
-        c.queryItems = [URLQueryItem(name: "q", value: words)]
+        c.scheme = "https"; c.host = engine.host; c.path = engine.path
+        c.queryItems = [URLQueryItem(name: engine.queryName, value: words)]
         return c.url
     }
+}
+
+/// Where the words typed in the address bar are searched. The words go to the chosen service (the page text never does).
+public enum SearchEngine: String, CaseIterable, Equatable, Sendable {
+    case google, yahooJapan, bing, duckDuckGo
+
+    public var title: String {
+        switch self {
+        case .google: return "Google"
+        case .yahooJapan: return "Yahoo! JAPAN"
+        case .bing: return "Bing"
+        case .duckDuckGo: return "DuckDuckGo"
+        }
+    }
+    public var host: String {
+        switch self {
+        case .google: return "www.google.com"
+        case .yahooJapan: return "search.yahoo.co.jp"
+        case .bing: return "www.bing.com"
+        case .duckDuckGo: return "duckduckgo.com"
+        }
+    }
+    public var path: String {
+        switch self {
+        case .google, .yahooJapan, .bing: return "/search"
+        case .duckDuckGo: return "/"
+        }
+    }
+    public var queryName: String { self == .yahooJapan ? "p" : "q" }
 }

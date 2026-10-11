@@ -14,6 +14,7 @@ public final class SettingsStore: @unchecked Sendable {
         static let embedDictionary = "mazemaze.embedDictionary"
         static let autoMeaning = "mazemaze.autoMeaning"
         static let translationEngine = "mazemaze.engine.translation"
+        static let searchEngine = "mazemaze.searchEngine"
         static let embedDictionaryCrashed = "mazemaze.embedDictionaryCrashed"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
@@ -40,6 +41,12 @@ public final class SettingsStore: @unchecked Sendable {
     public var safariIdentityForX: Bool {
         get { defaults.object(forKey: Key.safariIdentityForX) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
+    }
+
+    /// Where the address bar searches words (Google by default).
+    public var searchEngine: SearchEngine {
+        get { defaults.string(forKey: Key.searchEngine).flatMap(SearchEngine.init(rawValue:)) ?? .google }
+        set { defaults.set(newValue.rawValue, forKey: Key.searchEngine) }
     }
 
     /// Which engine translates pages (Apple Translation by default). Both run inside the iPhone.

@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var autoHideBars = true
     @State private var embedDictionary = true
     @State private var autoMeaning = true
+    @State private var searchEngine: SearchEngine = .google
 
     var body: some View {
         NavigationStack {
@@ -116,6 +117,15 @@ struct SettingsView: View {
                     Text("保存されるのは、ログイン・メール・ネットバンキング等を除く公開ページの URL（検索条件や認証情報は含みません）と、翻訳対象サイトのページ題名だけです。どちらもこの iPhone の中だけで、iCloud などのバックアップに含まれることがあります。ログイン情報や Cookie は「履歴を消去」では消えません。")
                 }
 
+                Section {
+                    Picker("検索エンジン", selection: $searchEngine) {
+                        ForEach(SearchEngine.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .onChange(of: searchEngine) { v in model.settings.searchEngine = v; model.settings.flush() }
+                } header: { Text("検索") } footer: {
+                    Text("アドレス欄に入れた語句（URL ではないもの）は、選んだ検索サービスに送られ、検索結果のページが開きます。ページの本文は送られません。")
+                }
+
                 Section("注意") {
                     Text("翻訳する文章は、この iPhone の中だけで処理され、外部のサーバーには送られません。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
                         .font(.footnote)
@@ -130,6 +140,7 @@ struct SettingsView: View {
                 autoHideBars = model.settings.autoHideBars
                 embedDictionary = model.settings.embedDictionary
                 autoMeaning = model.settings.autoMeaning
+                searchEngine = model.settings.searchEngine
                 model.refreshEngineStatus()
             }
             .onDisappear { ratioCommit?.cancel(); if abs(ratioDraft - model.ratio) > 0.0001 { model.ratio = ratioDraft } }
