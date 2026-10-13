@@ -15,6 +15,7 @@ public final class SettingsStore: @unchecked Sendable {
         static let autoMeaning = "mazemaze.autoMeaning"
         static let translationEngine = "mazemaze.engine.translation"
         static let searchEngine = "mazemaze.searchEngine"
+        static let lastBackupExport = "mazemaze.lastBackupExport"
         static let embedDictionaryCrashed = "mazemaze.embedDictionaryCrashed"
         static let recents = "mazemaze.recentsEnabled"
         static let tabs = "mazemaze.tabs.v1"
@@ -41,6 +42,12 @@ public final class SettingsStore: @unchecked Sendable {
     public var safariIdentityForX: Bool {
         get { defaults.object(forKey: Key.safariIdentityForX) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.safariIdentityForX) }
+    }
+
+    /// When the person last wrote a backup file out (nil: never). Only used to say so in the settings.
+    public var lastBackupExport: Date? {
+        get { (defaults.object(forKey: Key.lastBackupExport) as? Double).map(Date.init(timeIntervalSince1970:)) }
+        set { if let newValue { defaults.set(newValue.timeIntervalSince1970, forKey: Key.lastBackupExport) } else { defaults.removeObject(forKey: Key.lastBackupExport) } }
     }
 
     /// Where the address bar searches words (Google by default).

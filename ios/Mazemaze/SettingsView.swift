@@ -126,6 +126,32 @@ struct SettingsView: View {
                     Text("アドレス欄に入れた語句（URL ではないもの）は、選んだ検索サービスに送られ、検索結果のページが開きます。ページの本文は送られません。")
                 }
 
+                Section {
+                    NavigationLink {
+                        BackupView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("バックアップと復元")
+                            Text("辞書 \(model.dictionary.entries.count) 件・" + (model.settings.lastBackupExport.map { "最後に書き出した日 " + $0.formatted(date: .abbreviated, time: .omitted) } ?? "まだ書き出していません"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(minHeight: 44)
+                } header: { Text("データ") } footer: {
+                    Text("辞書とお気に入りは、この iPhone の中にだけあります（アプリが外に送ることはありません。iPhone 全体のバックアップには含まれます）。アプリを削除すると消えるので、ときどき書き出してください。")
+                }
+
+                Section {
+                    LabeledContent("バージョン") { Text("\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")（\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?")）") }
+                    LabeledContent("署名の期限") {
+                        if let d = model.signatureExpiry, let left = model.signatureDaysLeft {
+                            Text("\(d.formatted(date: .abbreviated, time: .omitted))（あと \(left) 日）").foregroundStyle(left <= 2 ? Color.orange : Color.primary)
+                        } else { Text("確認できません").foregroundStyle(.secondary) }
+                    }
+                    NavigationLink("エンジンの確認（保守用）") { EngineCheckView() }.frame(minHeight: 44)
+                } header: { Text("このアプリについて") } footer: {
+                    Text("無料の Apple ID で入れたアプリは、入れてから 7 日で署名が切れて、起動できなくなります。切れたら、Mac の Xcode からもう一度入れ直してください（アプリは削除しないでください。データが消えます）。")
+                }
+
                 Section("注意") {
                     Text("翻訳する文章は、この iPhone の中だけで処理され、外部のサーバーには送られません。「翻訳オフ」は今後の翻訳を止めて全ページを原文に戻します。「原文に戻す」はそのページだけです。")
                         .font(.footnote)

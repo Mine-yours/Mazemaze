@@ -127,6 +127,52 @@ public struct DictionaryData: Codable, Equatable, Sendable {
         return .added(entry)
     }
 
+    /// An entry that comes from outside (a backup file), checked and cleaned exactly like a new one, but it keeps its own date, note
+    /// and card. nil: refused (empty or too long).
+    private func sanitized(_ e: DictionaryEntry, existingIDs: Set<UUID>) -> (entry: DictionaryEntry, rejection: Rejection?) {
+        let en = Self.clean(e.english), ja = Self.clean(e.japanese)
+        let ctxEn = Self.clean(e.contextEnglish), ctxJa = Self.clean(e.contextJapanese)
+        let checkedCard = e.card?.revalidated()           // an unusable card is dropped; the entry stays
+        let meaning: MeaningState = checkedCard != nil ? .none : e.meaning
+        var note = String(e.note.unicodeScalars.filter { $0.properties.generalCategory != .control || $0 == "\n" }.map(Character.init))
+        if note.unicodeScalars.count > Self.maxNoteScalars { note = String(String.UnicodeScalarView(note.unicodeScalars.prefix(Self.maxNoteScalars))) }
+        let entry = DictionaryEntry(id: existingIDs.contains(e.id) ? UUID() : e.id, kind: e.kind, english: en, japanese: ja, contextEnglish: ctxEn, contextJapanese: ctxJa,
+                                    meaning: meaning, source: String(Self.clean(e.source).prefix(80)), sourceURL: SessionPrivacy.persistableURL(e.sourceURL),
+                                    note: note.trimmingCharacters(in: .whitespacesAndNewlines), savedAt: e.savedAt, card: checkedCard)
+        if en.isEmpty || (ja.isEmpty && meaning != .pending) { return (entry, .empty) }
+        if ![en, ja, ctxEn, ctxJa].allSatisfy({ $0.unicodeScalars.count <= Self.maxTermScalars }) { return (entry, .tooLong) }
+        return (entry, nil)
+    }
+
+    /// Brings many entries in at once (a backup): each is checked like a new one and keeps its own date, note and card; a duplicate
+    /// changes nothing, except that a card the existing entry lacks is taken over. The result is newest first. One index is built for
+    /// the whole batch, so a full dictionary of 5000 comes in at once, not 5000 scans of 5000.
+    @discardableResult
+    public mutating func merge(_ incoming: [DictionaryEntry]) -> [AddResult] {
+        var index: [String: Int] = [:]
+        for (i, e) in entries.enumerated() { index[Self.key(of: e)] = index[Self.key(of: e)] ?? i }
+        var ids = Set(entries.map(\.id))
+        var results: [AddResult] = []
+        var added = false
+        for e in incoming {
+            let (entry, rejection) = sanitized(e, existingIDs: ids)
+            if let rejection { results.append(.rejected(rejection)); continue }
+            let k = Self.key(of: entry)
+            if let i = index[k] {
+                if entries[i].card == nil, let card = entry.card { setCard(id: entries[i].id, card: card) }
+                results.append(.duplicate(entries[i])); continue
+            }
+            guard entries.count < Self.maxEntries else { results.append(.rejected(.full)); continue }
+            entries.append(entry); index[k] = entries.count - 1; ids.insert(entry.id); added = true
+            results.append(.added(entry))
+        }
+        if added { entries.sort { $0.savedAt > $1.savedAt } }
+        return results
+    }
+
+    @discardableResult
+    public mutating func merge(_ e: DictionaryEntry) -> AddResult { merge([e])[0] }
+
     /// A word looked up on the card: saved as its own entry (English = base form, Japanese = the sense in context), with the
     /// English phrase and the Japanese original it was read in.
     @discardableResult
@@ -245,6 +291,14 @@ public final class DictionaryStorage: @unchecked Sendable {
             lastLoadProblem = "辞書のファイルを読み込めず、退避もできませんでした。保存した内容を守るため、新しい保存はしません。"
         }
         return DictionaryData()
+    }
+
+    /// Files set aside because they could not be read (`mazemaze-dictionary.unreadable-<time>.json`), newest first.
+    public func asideFiles() -> [URL] {
+        let dir = fileURL.deletingLastPathComponent()
+        let prefix = fileURL.deletingPathExtension().lastPathComponent + ".unreadable-"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { $0.hasPrefix(prefix) && $0.hasSuffix(".json") }.sorted(by: >).map { dir.appendingPathComponent($0) }
     }
 
     @discardableResult

@@ -45,6 +45,7 @@ final class AppModel: ObservableObject {
 
     // Dictionary (expressions the person saved; this iPhone only)
     let dictionaryStorage: DictionaryStorage
+    let snapshots: DictionarySnapshots              // dated copies of the dictionary file, kept inside the app
     let dictionaryEmbedMarker: CrashMarker           // around showing the iPhone's dictionary inside the sheet
     @Published private(set) var dictionary: DictionaryData
     @Published var dictionaryProblem: String?
@@ -117,6 +118,8 @@ final class AppModel: ObservableObject {
         }
         dictionary = dictionaryStorage.load()
         dictionaryProblem = dictionaryStorage.lastLoadProblem
+        snapshots = DictionarySnapshots(directory: useTempDictionary ? dictFile.deletingLastPathComponent().appendingPathComponent("mazemaze-backups-test-\(ProcessInfo.processInfo.processIdentifier)") : DictionarySnapshots.defaultDirectory())
+        if dictionaryStorage.isWritable, dictionaryStorage.lastLoadProblem == nil { snapshots.snapshot(of: dictFile) }          // the first start of the day keeps a copy
         let s = store
         var serviceOptions = TranslationService.Options()
         #if DEBUG
@@ -541,6 +544,55 @@ final class AppModel: ObservableObject {
     }
 
     /// Back in the foreground: if the file could not be read earlier (the phone was locked), try again.
+    // MARK: backup (a file the person writes out and brings back; nothing leaves the iPhone by itself)
+    /// Checks a backup file and says what is in it, without changing anything.
+    func previewBackup(_ data: Data) -> Result<BackupFile, BackupError> {
+        do { return .success(try Backup.decode(data)) } catch { return .failure((error as? BackupError) ?? .unreadable) }
+    }
+
+    enum ImportOutcome { case imported(ImportReport), failed(String) }
+
+    /// Brings the backup into what is here (nothing is replaced or removed). It happens completely or not at all: a copy of the
+    /// dictionary is kept first, the dictionary is written before anything else is touched, and any failure stops it with a reason.
+    func importBackup(_ file: BackupFile) -> ImportOutcome {
+        guard dictionaryStorage.isWritable else { return .failed(dictionaryProblem ?? "辞書を保存できる状態ではありません。") }
+        if snapshots.snapshot(of: dictionaryStorage.fileURL, label: "before-import") == .failed {
+            return .failed("取り込む前の控えを作れなかったため、取り込みませんでした。空き容量を確認してください。")
+        }
+        var d = dictionary, b = bookmarks, hosts = allowedHosts
+        let report = Backup.merge(file, into: &d, bookmarks: &b, allowedHosts: &hosts)
+        if d != dictionary {
+            let previous = dictionary
+            dictionary = d
+            if !persistDictionary() { dictionary = previous; return .failed(dictionaryProblem ?? "辞書を保存できませんでした。") }
+        }
+        if b != bookmarks { bookmarks = b; bookmarkStorage.save(b) }
+        if hosts != allowedHosts { setAllowedHosts(hosts) }
+        startMeaningWorker()
+        return .imported(report)
+    }
+
+    /// Puts an earlier copy of the dictionary back (the current one is kept as a copy first; see `DictionarySnapshots.restore`).
+    func restoreSnapshot(_ s: DictionarySnapshots.Snapshot) -> DictionarySnapshots.RestoreResult {
+        let result = snapshots.restore(s, to: dictionaryStorage.fileURL, currentFileIsWritable: dictionaryStorage.isWritable)
+        if case .restored = result {
+            dictionary = dictionaryStorage.load()
+            dictionaryProblem = dictionaryStorage.lastLoadProblem
+            startMeaningWorker()
+        }
+        return result
+    }
+
+    /// The first start of the day (and the first return to the app on a new day) keeps a copy of the dictionary.
+    func snapshotDictionaryIfNeeded() {
+        guard dictionaryStorage.isWritable, dictionaryStorage.lastLoadProblem == nil else { return }
+        snapshots.snapshot(of: dictionaryStorage.fileURL)
+    }
+
+    func markBackupExported() { settings.lastBackupExport = Date(); settings.flush(); objectWillChange.send() }
+
+    func removeAsideFile(_ url: URL) { try? FileManager.default.removeItem(at: url); objectWillChange.send() }
+
     func reloadDictionaryIfNeeded() {
         guard !dictionaryStorage.isWritable else { return }
         dictionary = dictionaryStorage.load()

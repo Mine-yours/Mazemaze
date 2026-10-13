@@ -79,7 +79,7 @@ struct ContentView: View {
                 model.startMeaningWorker()
             }
             .onChange(of: scenePhase) { phase in
-                if phase == .active { model.refreshEngineStatus(); model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
+                if phase == .active { model.refreshEngineStatus(); model.snapshotDictionaryIfNeeded(); model.active.recoverIfNeeded(); model.pasteTab?.recoverIfNeeded(); model.reloadDictionaryIfNeeded(); model.startMeaningWorker() }
                 if phase == .background { model.persistTabsNow() }          // the 0.8 s delayed save may not get to run
             }
             .onChange(of: model.pasteNonce) { _ in

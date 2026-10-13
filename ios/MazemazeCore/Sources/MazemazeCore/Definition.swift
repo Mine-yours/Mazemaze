@@ -197,6 +197,36 @@ public enum DefinitionCard: Equatable, Sendable {
     }
 }
 
+extension DefinitionCard {
+    /// The same card with every field held to the limits a card from the model has to meet (length, count, no control or invisible
+    /// characters). A card read from a file is never trusted as it is; nil when its essential parts are not usable.
+    public func revalidated() -> DefinitionCard? {
+        func f(_ s: String?, _ limit: Int) -> String? { DefinitionText.field(s, limit: limit) }
+        func fs(_ a: [String], _ limit: Int, _ count: Int) -> [String] { DefinitionText.fields(a, limit: limit, count: count) }
+        switch self {
+        case .word(let c):
+            guard let lemma = f(c.lemma, 40), Self.isLemma(lemma), let meaning = f(c.contextMeaning, 40) else { return nil }
+            var meanings: [WordMeaning] = []
+            for m in c.meanings {
+                guard let mm = f(m.meaning, 40) else { continue }
+                let en = f(m.exampleEn, 120)
+                meanings.append(WordMeaning(meaning: mm, exampleEn: en, exampleJa: en == nil ? nil : f(m.exampleJa, 120)))
+                if meanings.count >= 5 { break }
+            }
+            if !meanings.contains(where: { $0.meaning == meaning }) { meanings.insert(WordMeaning(meaning: meaning, exampleEn: nil, exampleJa: nil), at: 0); meanings = Array(meanings.prefix(5)) }
+            let index = meanings.firstIndex(where: { $0.meaning == meaning }) ?? 0
+            return .word(WordCard(lemma: lemma, pos: f(c.pos, 12) ?? "", contextMeaning: meaning, contextIndex: index, meanings: meanings,
+                                  matchInSource: f(c.matchInSource, 20), phrases: fs(c.phrases, 40, 4), note: f(c.note, 80)))
+        case .phrase(let c):
+            guard let meaning = f(c.meaning, 100) else { return nil }
+            var points: [PhrasePoint] = []
+            for p in c.points { if let e = f(p.expr, 80) { points.append(PhrasePoint(expr: e, note: f(p.note, 80) ?? "")) }; if points.count >= 2 { break } }
+            let examples = c.examples.prefix(1).compactMap { ex in f(ex.en, 120).map { PhraseExample(en: $0, ja: f(ex.ja, 120) ?? "") } }
+            return .phrase(PhraseCard(meaning: meaning, nuance: f(c.nuance, 100), points: points, synonyms: fs(c.synonyms, 60, 3), examples: Array(examples)))
+        }
+    }
+}
+
 extension DefinitionCard: Codable {
     private enum Key: String, CodingKey { case kind, word, phrase }
     public init(from decoder: Decoder) throws {

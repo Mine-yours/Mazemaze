@@ -50,6 +50,10 @@ struct HomeView: View {
                 Label("単語の意味（AI）: Apple Intelligence" + (model.foundationModelsProblem.map { "（\($0)）" } ?? ""), systemImage: "character.book.closed")
             }
             .font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let left = model.signatureDaysLeft, left <= 2 {
+                Label("署名があと \(left) 日で切れます。切れたら、Mac の Xcode から入れ直してください（アプリは削除しないでください）。", systemImage: "clock.badge.exclamationmark")
+                    .font(.footnote).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
             Button("設定を開く") { showSettings = true }.buttonStyle(.bordered).frame(minHeight: 44)
         }
         .padding(14)

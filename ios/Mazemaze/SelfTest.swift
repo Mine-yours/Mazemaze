@@ -411,6 +411,32 @@ enum SelfTest {
             report("engine switch: the page is translated by the other engine", viaOther && shownOther.contains("Fake Model") && !shownOther.contains("Fake English") && (tab.lastProblem ?? "").isEmpty, "shown=\(shownOther.prefix(80)) problem=\(tab.lastProblem ?? "-")")
             app.translationEngine = .appleTranslation
 
+            // ---- Backup: write out, bring back (merge), restore an earlier copy
+            let backupBefore = app.dictionary.entries.count
+            _ = app.saveToDictionary(english: "backup test phrase", japanese: "バックアップの試験", pageURL: URL(string: "https://news.yahoo.co.jp/articles/x"))
+            let backupData = app.makeBackupData()
+            var previewOK = false
+            if let backupData, case .success(let file) = app.previewBackup(backupData) { previewOK = file.dictionary.entries.contains { $0.english == "backup test phrase" } }
+            report("backup: the file is written and can be read back, with the saved expression in it", previewOK && app.dictionary.entries.count == backupBefore + 1)
+            if let id = app.dictionary.entries.first(where: { $0.english == "backup test phrase" })?.id { app.removeFromDictionary(ids: [id]) }
+            if let backupData, case .success(let file) = app.previewBackup(backupData) {
+                var firstAdded = -1, secondAdded = -1, secondDup = -1
+                if case .imported(let r) = app.importBackup(file) { firstAdded = r.dictionaryAdded }
+                if case .imported(let r) = app.importBackup(file) { secondAdded = r.dictionaryAdded; secondDup = r.dictionaryDuplicates }
+                report("backup: importing brings the expression back once and never twice", firstAdded == 1 && secondAdded == 0 && secondDup >= 1
+                       && app.dictionary.entries.filter { $0.english == "backup test phrase" }.count == 1, "\(firstAdded) \(secondAdded) \(secondDup)")
+            } else { report("backup: importing brings the expression back once and never twice", false) }
+            // an earlier copy of the dictionary can be put back
+            _ = app.snapshots.snapshot(of: app.dictionaryStorage.fileURL, label: "selftest-before-x")
+            if let id = app.dictionary.entries.first(where: { $0.english == "backup test phrase" })?.id { app.removeFromDictionary(ids: [id]) }
+            if let snap = app.snapshots.list().first(where: { $0.url.lastPathComponent.contains("selftest-before-x") }) {
+                var restored = false
+                if case .restored = app.restoreSnapshot(snap) { restored = true }
+                report("backup: restoring an earlier copy puts the dictionary back", restored && app.dictionary.entries.contains { $0.english == "backup test phrase" })
+            } else { report("backup: restoring an earlier copy puts the dictionary back", false, "no copy") }
+            if let id = app.dictionary.entries.first(where: { $0.english == "backup test phrase" })?.id { app.removeFromDictionary(ids: [id]) }
+            report("backup: a hostile file is refused", { if case .failure(.notABackup) = app.previewBackup(Data(#"{"format":"other"}"#.utf8)) { return true } else { return false } }())
+
             print("SELFTEST DONE passed=\(passed) failed=\(failed)")
             fflush(stdout)
             exit(failed == 0 ? 0 : 1)
